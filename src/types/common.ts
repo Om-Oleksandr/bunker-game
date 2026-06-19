@@ -1,7 +1,7 @@
 export interface IPlayer {
   id: string;
-  cards: { name: string; category: string }[];
-  revealedCards: { name: string; category: string }[];
+  cards: { id: string; name: string; category: string; isPlayed: boolean }[];
+  playedCards: { name: string; category: string }[];
   isVotedOut: boolean;
 }
 

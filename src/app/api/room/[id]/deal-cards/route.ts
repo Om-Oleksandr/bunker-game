@@ -3,6 +3,7 @@ import { cloneDeep } from "es-toolkit";
 import { NextRequest } from "next/server";
 import player_cards from "@/cards/bunker_data.json";
 import { kv } from "@vercel/kv";
+import { nanoid } from "nanoid";
 
 function drawFromCategory(deck: string[]) {
   const index = Math.floor(Math.random() * deck.length);
@@ -29,8 +30,10 @@ export async function POST(req: NextRequest) {
         const cardName = drawFromCategory(deck);
 
         player.cards.push({
+          id: nanoid(9),
           name: cardName,
           category,
+          isPlayed: false,
         });
       }
     }

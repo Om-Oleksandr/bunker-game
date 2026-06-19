@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
       players: {
         [body.userId]: {
           cards: [],
-          revealedCards: [],
+          playedCards: [],
           isVotedOut: false,
           id: body.userId,
         },

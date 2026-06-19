@@ -37,7 +37,7 @@ export default function Room({ roomId }: { roomId: string }) {
     const player = {
       id: userId,
       cards: [],
-      revealedCards: [],
+      playedCards: [],
       isVotedOut: false,
     };
     const newRoom = cloneDeep(room);
@@ -55,7 +55,8 @@ export default function Room({ roomId }: { roomId: string }) {
     if (!channel) return;
 
     const onCardPlayed = (msg: InboundMessage) => {
-      console.log("card played:", msg.data);
+      tableRef.current?.animateCardPlay(msg.data);
+      refetch();
     };
 
     const onPlayerJoined = () => {
@@ -90,10 +91,8 @@ export default function Room({ roomId }: { roomId: string }) {
     channel.subscribe("vote-end", onCardPlayed);
 
     channel.subscribe("cards-dealed", () => console.log("cards dealt"));
-    channel.presence.enter({ name: "player1" });
 
     return () => {
-      channel.presence.leave();
       channel.unsubscribe();
     };
   }, [roomId, room, channel, refetch]);
@@ -107,8 +106,9 @@ export default function Room({ roomId }: { roomId: string }) {
     animatedDealStartedAtRef.current = room.dealStartedAt;
     const startedAt = room.dealStartedAt;
     requestAnimationFrame(() => {
-      void tableRef.current?.startDealAnimationFromOffset(startedAt).then(
-        async () => {
+      void tableRef.current
+        ?.startDealAnimationFromOffset(startedAt)
+        .then(async () => {
           if (room.adminId !== userId) return;
 
           await updateRoom(roomId, room, {
@@ -117,8 +117,7 @@ export default function Room({ roomId }: { roomId: string }) {
           });
           await channel?.publish("room-updated", { phase: "idle" });
           await refetch();
-        },
-      );
+        });
     });
   }, [room, userId, roomId, channel, refetch]);
 
