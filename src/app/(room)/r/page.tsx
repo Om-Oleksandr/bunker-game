@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import NicknamePrompt from "@/components/NicknamePrompt";
+import NicknamePrompt from "@/app/components/NicknamePrompt";
 import { useNickname } from "@/hooks/useNickname";
 
 export default function Page() {

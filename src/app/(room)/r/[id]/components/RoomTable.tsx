@@ -141,12 +141,12 @@ const RoomTable = forwardRef<
   const explanationEndsAt = room.activeCardPlay?.returnStartedAt ?? 0;
   const statusText =
     room.activeCardPlay && now < explanationEndsAt
-      ? `Explain your card: ${Math.ceil((explanationEndsAt - now) / 1000)}s`
+      ? `Час: ${Math.ceil((explanationEndsAt - now) / 1000)}s`
       : room.turnAvailableAt && now < room.turnAvailableAt
-        ? `Next turn in ${Math.ceil((room.turnAvailableAt - now) / 1000)}s`
+        ? `Наступний хід через ${Math.ceil((room.turnAvailableAt - now) / 1000)}s`
         : currentTurn === userId
-          ? "Your turn"
-          : "Waiting for another player";
+          ? "Твій хід"
+          : `Чекаємо на ${room.players[room.currentTurn].nickname}`;
 
   const getSeats = useCallback((): Seat[] => {
     const { width, height } = sceneSizeRef.current;
@@ -755,8 +755,6 @@ const RoomTable = forwardRef<
           scaleX={scale}
           scaleY={scale}
         >
-          <Rect width={width} height={height} fill="#145a32" />
-
           <Ellipse
             x={layout.center.x}
             y={layout.center.y}

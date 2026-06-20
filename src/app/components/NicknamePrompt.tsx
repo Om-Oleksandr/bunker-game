@@ -1,10 +1,10 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { SubmitEvent, useState } from "react";
 
 export default function NicknamePrompt({
   onSubmit,
-  submitLabel = "Join room",
+  submitLabel = "Доєднатись",
 }: {
   onSubmit: (nickname: string) => void;
   submitLabel?: string;
@@ -12,7 +12,7 @@ export default function NicknamePrompt({
   const [value, setValue] = useState("");
   const nickname = value.trim();
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  function submit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!nickname) return;
     onSubmit(nickname);
@@ -25,7 +25,7 @@ export default function NicknamePrompt({
         className="w-full max-w-sm rounded-lg bg-white p-6 text-zinc-950 shadow-xl"
       >
         <label htmlFor="nickname" className="mb-2 block text-sm font-semibold">
-          Nickname
+          Введіть нік
         </label>
         <input
           id="nickname"
