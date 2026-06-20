@@ -1,22 +1,39 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import NicknamePrompt from "@/components/NicknamePrompt";
+import { useNickname } from "@/hooks/useNickname";
 
 export default function Page() {
   const router = useRouter();
+  const { nickname, saveNickname } = useNickname();
   const createRoom = async () => {
     try {
       const userId = localStorage.getItem("userId");
+      if (!userId || !nickname) return;
+
       const res = await fetch("/api/room/create", {
         method: "POST",
-        body: JSON.stringify({ userId }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, nickname }),
       });
       const data = await res.json();
-      router.push(`${window.location.origin}/r/${data.roomId}`);
+      if (!res.ok) throw new Error(data.error ?? "Failed to create room");
+      router.push(`/r/${data.roomId}`);
 
     } catch (error) {
       console.error("Error", error);
     }
   };
+
+  if (!nickname) {
+    return (
+      <NicknamePrompt
+        onSubmit={saveNickname}
+        submitLabel="Continue"
+      />
+    );
+  }
+
   return <button onClick={createRoom}>create room</button>;
 }

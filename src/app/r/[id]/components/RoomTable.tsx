@@ -41,8 +41,6 @@ const PLAY_FLIP_DURATION = 300; // the reveal flip at board centre
 const MIN_SCENE_WIDTH = 900;
 const MIN_SCENE_HEIGHT = 720;
 const MAX_SCENE_SCALE = 1.15;
-const SCENE_PADDING = 24;
-const LOCAL_HAND_BOTTOM_INSET = 88;
 
 // ─── New helper: compute the 7 slot positions for a given seat ────────────────
 
@@ -1142,7 +1140,14 @@ const RoomTable = forwardRef<
           {seats.map((p) => (
             <Group key={p.id} x={p.x} y={p.y}>
               <Circle radius={32} fill="#222" />
-              <Text text={p.id} fill="white" x={-70} y={40} />
+              <Text
+                text={room.players[p.id]?.nickname ?? p.id}
+                fill="white"
+                x={-70}
+                y={40}
+                width={140}
+                align="center"
+              />
             </Group>
           ))}
         </Layer>

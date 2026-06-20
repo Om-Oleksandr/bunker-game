@@ -9,8 +9,11 @@ import RoomTable, { RoomTableHandle } from "./RoomTable";
 import { InboundMessage } from "ably";
 import { updateRoom } from "@/app/actions/kv";
 import { nanoid } from "nanoid";
+import NicknamePrompt from "@/components/NicknamePrompt";
+import { useNickname } from "@/hooks/useNickname";
 
 export default function Room({ roomId }: { roomId: string }) {
+  const { nickname, saveNickname } = useNickname();
   const ably = getAblyClient();
   const channel = ably?.channels.get(`room:${roomId}`);
   const [userId] = useState(() => {
@@ -33,19 +36,25 @@ export default function Room({ roomId }: { roomId: string }) {
   const animatedDealStartedAtRef = useRef<number | null>(null);
 
   const mutateStore = useCallback(async () => {
-    if (!room || !userId || room.players[userId]) return;
-    const player = {
-      id: userId,
-      cards: [],
-      playedCards: [],
-      isVotedOut: false,
-    };
+    if (!room || !userId || !nickname) return;
+    const existingPlayer = room.players[userId];
+    if (existingPlayer?.nickname === nickname) return;
+
+    const player = existingPlayer
+      ? { ...existingPlayer, nickname }
+      : {
+          id: userId,
+          nickname,
+          cards: [],
+          playedCards: [],
+          isVotedOut: false,
+        };
     const newRoom = cloneDeep(room);
     newRoom.players = { ...room.players, [userId]: player };
 
-    await mutateAsync({ userId, roomId, newRoom });
-    channel?.publish("player-joined", { userId });
-  }, [channel, mutateAsync, room, roomId, userId]);
+    await mutateAsync({ userId, nickname, roomId, newRoom });
+    channel?.publish("player-joined", { userId, nickname });
+  }, [channel, mutateAsync, nickname, room, roomId, userId]);
 
   useEffect(() => {
     mutateStore();
@@ -120,6 +129,10 @@ export default function Room({ roomId }: { roomId: string }) {
         });
     });
   }, [room, userId, roomId, channel, refetch]);
+
+  if (!nickname) {
+    return <NicknamePrompt onSubmit={saveNickname} />;
+  }
 
   if (!room || !channel || !userId) {
     return <>loading</>;

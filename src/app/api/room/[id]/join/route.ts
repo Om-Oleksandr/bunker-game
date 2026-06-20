@@ -1,4 +1,5 @@
 import { APIRouteReturn } from "@/types/api";
+import { IRoom } from "@/types/common";
 import { kv } from "@vercel/kv";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -11,9 +12,37 @@ export async function POST(
   try {
     const { id } = await params;
     const body = await req.json();
-    const { newRoom } = body;
+    const userId = String(body.userId ?? "");
+    const nickname = String(body.nickname ?? "").trim().slice(0, 24);
+    const incomingRoom = body.newRoom as IRoom;
 
-    await kv.set(`room:${id}`, newRoom);
+    if (!userId || !nickname) {
+      return NextResponse.json(
+        { error: "User ID and nickname are required" },
+        { status: 400 },
+      );
+    }
+
+    const room = await kv.get<IRoom>(`room:${id}`);
+    if (!room) {
+      return NextResponse.json({ error: "Room not found" }, { status: 404 });
+    }
+
+    const incomingPlayer = incomingRoom?.players?.[userId];
+    if (!incomingPlayer) {
+      return NextResponse.json(
+        { error: "Player data is required" },
+        { status: 400 },
+      );
+    }
+
+    room.players[userId] = {
+      ...incomingPlayer,
+      id: userId,
+      nickname,
+    };
+
+    await kv.set(`room:${id}`, room);
 
     return NextResponse.json({ data: { success: true } }, { status: 200 });
   } catch (error) {

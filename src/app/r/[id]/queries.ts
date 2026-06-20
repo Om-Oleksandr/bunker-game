@@ -7,12 +7,18 @@ import { mutationOptions, queryOptions } from "@tanstack/react-query";
 type JoinRoomPayload = {
   roomId: string;
   userId: string;
+  nickname: string;
   newRoom: IRoom;
 };
 
 export type RoomData = Awaited<ReturnType<typeof getRoom>>;
 
-async function joinRoom({ roomId, userId, newRoom }: JoinRoomPayload) {
+async function joinRoom({
+  roomId,
+  userId,
+  nickname,
+  newRoom,
+}: JoinRoomPayload) {
   const res = await fetch(`/api/room/${roomId}/join`, {
     method: "POST",
     headers: {
@@ -21,6 +27,7 @@ async function joinRoom({ roomId, userId, newRoom }: JoinRoomPayload) {
     body: JSON.stringify({
       roomId,
       userId,
+      nickname,
       newRoom,
     }),
   });
