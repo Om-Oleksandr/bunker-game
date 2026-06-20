@@ -20,6 +20,9 @@ import {
   DEAL_STAGGER,
   FLIP_DURATION,
   FLIP_STAGGER,
+  OPPONENT_CARD_OFFSET_X,
+  OPPONENT_CARD_SCALE,
+  OPPONENT_HAND_OFFSET_Y,
   OPPONENT_OFFSET_Y,
   SPREAD_DURATION,
 } from "@/common/cards";
@@ -33,11 +36,12 @@ import { RealtimeChannel } from "ably";
 const SLOT_COLS_BOTTOM = 4;
 const SLOT_COLS_TOP = 3;
 
-const SLOT_OFFSET_Y = 120; // tune to taste
+const SLOT_OFFSET_Y = 105; // tune to taste
 
 // Animation durations for card-play events (ms)
 const PLAY_TRAVEL_DURATION = 450; // card moving from hand to slot (or to centre)
 const PLAY_FLIP_DURATION = 300; // the reveal flip at board centre
+const CENTER_CARD_SCALE = 1;
 const MIN_SCENE_WIDTH = 900;
 const MIN_SCENE_HEIGHT = 720;
 const MAX_SCENE_SCALE = 1.15;
@@ -106,6 +110,18 @@ interface Seat {
   x: number;
   y: number;
   isLocal: boolean;
+}
+
+function getHandY(seat: Seat) {
+  return seat.y + (seat.isLocal ? SLOT_OFFSET_Y : OPPONENT_HAND_OFFSET_Y);
+}
+
+function getOpponentCardX(seat: Seat, cardIndex: number) {
+  return seat.x + OPPONENT_CARD_OFFSET_X + Math.max(cardIndex, 0) * 8;
+}
+
+function getCenterCardPosition(width: number, height: number) {
+  return { x: width / 2, y: height / 2 - CARD_HEIGHT };
 }
 
 export interface RoomTableHandle {
@@ -289,8 +305,7 @@ function getLayout(width: number, height: number) {
 function getHandStartX(centerX: number, cardCount: number) {
   if (cardCount === 0) return centerX;
 
-  const totalWidth =
-    cardCount * CARD_WIDTH + (cardCount - 1) * CARD_GAP;
+  const totalWidth = cardCount * CARD_WIDTH + (cardCount - 1) * CARD_GAP;
   return centerX + CARD_WIDTH / 2 - totalWidth / 2;
 }
 
@@ -464,12 +479,11 @@ const RoomTable = forwardRef<
         const targetSlot = seat.isLocal
           ? slotPositions[slotIndex]
           : {
-              x: seat.x + Math.max(cardIndex, 0) * 8,
-              y: seat.y,
+              x: getOpponentCardX(seat, cardIndex),
+              y: getHandY(seat),
             };
         const { width, height } = sceneSizeRef.current;
-        const centerX = width / 2;
-        const centerY = height / 2;
+        const centerCard = getCenterCardPosition(width, height);
 
         // Disable click while animating so the card can't be played twice
         node.off("click tap mouseenter mouseleave");
@@ -482,11 +496,8 @@ const RoomTable = forwardRef<
           const remainingCards = room.players[seatId].cards.filter(
             (card) => !card.isPlayed && card.id !== cardId,
           );
-          const remainingStartX = getHandStartX(
-            seat.x,
-            remainingCards.length,
-          );
-          const handY = seat.y + SLOT_OFFSET_Y;
+          const remainingStartX = getHandStartX(seat.x, remainingCards.length);
+          const handY = getHandY(seat);
           const handTransitions = remainingCards.flatMap((card, index) => {
             const cardNode = cardNodesRef.current.get(card.id);
             if (!cardNode) return [];
@@ -497,8 +508,7 @@ const RoomTable = forwardRef<
                 node: cardNode,
                 fromX: cardNode.x(),
                 fromY: cardNode.y(),
-                toX:
-                  remainingStartX + index * (CARD_WIDTH + CARD_GAP),
+                toX: remainingStartX + index * (CARD_WIDTH + CARD_GAP),
                 toY: handY,
               },
             ];
@@ -531,20 +541,32 @@ const RoomTable = forwardRef<
           const fromY = node.y();
           const revealCompletedAt =
             payload.startedAt + PLAY_TRAVEL_DURATION + PLAY_FLIP_DURATION;
-          const resumeAtCenter = Date.now() >= revealCompletedAt;
+          const isAlreadyAtCenter =
+            Math.abs(node.x() - centerCard.x) < 1 &&
+            Math.abs(node.y() - centerCard.y) < 1;
+          const resumeAtCenter =
+            isAlreadyAtCenter || Date.now() >= revealCompletedAt;
+          const cardScale =
+            (node.getAttr("cardScale") as number | undefined) ??
+            OPPONENT_CARD_SCALE;
 
           if (resumeAtCenter) {
             const rect = node.findOne(".cardRect") as Konva.Rect | undefined;
-            node.position({ x: centerX, y: centerY });
-            node.scaleX(1);
+            node.position(centerCard);
+            node.scale({ x: CENTER_CARD_SCALE, y: CENTER_CARD_SCALE });
             if (rect) rect.fill("#fee2e2");
             revealCardText(node);
           } else {
             // Step 1: travel to board centre
             await waitForAnimation(layer, (elapsed) => {
               const t = Math.min(elapsed / PLAY_TRAVEL_DURATION, 1);
-              node.x(fromX + (centerX - fromX) * easeOutCubic(t));
-              node.y(fromY + (centerY - fromY) * easeOutCubic(t));
+              const easedTime = easeOutCubic(t);
+              const scale =
+                cardScale + (CENTER_CARD_SCALE - cardScale) * easedTime;
+              node.x(fromX + (centerCard.x - fromX) * easedTime);
+              node.y(fromY + (centerCard.y - fromY) * easedTime);
+              node.scale({ x: scale, y: scale });
+
               return t < 1;
             });
 
@@ -555,17 +577,17 @@ const RoomTable = forwardRef<
               const t = Math.min(elapsed / PLAY_FLIP_DURATION, 1);
 
               if (t < 0.5) {
-                node.scaleX(1 - t * 2);
+                node.scaleX(CENTER_CARD_SCALE * (1 - t * 2));
               } else {
                 if (rect) rect.fill("#fee2e2");
                 revealCardText(node);
-                node.scaleX((t - 0.5) * 2);
+                node.scaleX(CENTER_CARD_SCALE * (t - 0.5) * 2);
               }
 
               return t < 1;
             });
 
-            node.scaleX(1);
+            node.scale({ x: CENTER_CARD_SCALE, y: CENTER_CARD_SCALE });
           }
 
           await new Promise((resolve) =>
@@ -576,11 +598,15 @@ const RoomTable = forwardRef<
           );
 
           // Step 3: return to the card's original hand position
+          const returnDuration = Math.max(returnedAt - Date.now(), 1);
           await waitForAnimation(layer, (elapsed) => {
-            const duration = Math.max(returnedAt - Date.now(), 1);
-            const t = Math.min(elapsed / duration, 1);
-            node.x(centerX + (targetSlot.x - centerX) * easeOutCubic(t));
-            node.y(centerY + (targetSlot.y - centerY) * easeOutCubic(t));
+            const t = Math.min(elapsed / returnDuration, 1);
+            const easedTime = easeOutCubic(t);
+            const scale =
+              CENTER_CARD_SCALE + (cardScale - CENTER_CARD_SCALE) * easedTime;
+            node.x(centerCard.x + (targetSlot.x - centerCard.x) * easedTime);
+            node.y(centerCard.y + (targetSlot.y - centerCard.y) * easedTime);
+            node.scale({ x: scale, y: scale });
             return t < 1;
           });
         }
@@ -679,8 +705,7 @@ const RoomTable = forwardRef<
       const playedCards = cards
         .filter((c) => c.isPlayed)
         .sort((firstCard, secondCard) => {
-          const firstOrder =
-            firstCard.playedOrder ?? cards.indexOf(firstCard);
+          const firstOrder = firstCard.playedOrder ?? cards.indexOf(firstCard);
           const secondOrder =
             secondCard.playedOrder ?? cards.indexOf(secondCard);
           return firstOrder - secondOrder;
@@ -688,14 +713,11 @@ const RoomTable = forwardRef<
 
       // ── Hand cards ──────────────────────────────────────────────────────────
       const startX = getHandStartX(seat.x, handCards.length);
-      const y = seat.isLocal ? seat.y + 120 : seat.y;
+      const y = getHandY(seat) + 15;
 
       (seat.isLocal ? handCards : []).forEach((card, index) => {
-        const originalIndex = cards.findIndex(({ id }) => id === card.id);
         const group = new Konva.Group({
-          x: seat.isLocal
-            ? startX + index * (CARD_WIDTH + CARD_GAP)
-            : seat.x + originalIndex * 8,
+          x: startX + index * (CARD_WIDTH + CARD_GAP),
           y,
         });
 
@@ -756,18 +778,25 @@ const RoomTable = forwardRef<
             card.isPlayed &&
             room.activeCardPlay?.cardId === card.id &&
             now < room.activeCardPlay.returnStartedAt;
+          const centerCard = getCenterCardPosition(
+            sceneSizeRef.current.width,
+            sceneSizeRef.current.height,
+          );
 
           const group = new Konva.Group({
             x: activeInCenter
-              ? sceneSizeRef.current.width / 2
-              : seat.x + originalIndex * 8,
-            y: activeInCenter ? sceneSizeRef.current.height / 2 : seat.y,
+              ? centerCard.x
+              : getOpponentCardX(seat, originalIndex),
+            y: activeInCenter ? centerCard.y : getHandY(seat),
+            scaleX: activeInCenter ? CENTER_CARD_SCALE : OPPONENT_CARD_SCALE,
+            scaleY: activeInCenter ? CENTER_CARD_SCALE : OPPONENT_CARD_SCALE,
           });
 
           group.setAttr("cardName", card.name);
           group.setAttr("cardCategory", card.category);
           group.setAttr("seatId", seat.id);
           group.setAttr("isPlayed", card.isPlayed);
+          group.setAttr("cardScale", OPPONENT_CARD_SCALE);
 
           const { categoryText, nameText } = createCardTextNodes(
             card.name,
@@ -840,19 +869,28 @@ const RoomTable = forwardRef<
           category: storeCard.category,
           startX: deckX,
           startY: deckY,
-          targetX: seat.x + round * 8,
-          targetY: seat.y,
+          targetX: seat.isLocal
+            ? seat.x + round * 8
+            : getOpponentCardX(seat, round),
+          targetY: getHandY(seat),
           delay: index * DEAL_STAGGER,
         };
 
         cards.push(card);
 
-        const group = new Konva.Group({ x: deckX, y: deckY });
+        const cardScale = seat.isLocal ? 1 : OPPONENT_CARD_SCALE;
+        const group = new Konva.Group({
+          x: deckX,
+          y: deckY,
+          scaleX: 1,
+          scaleY: 1,
+        });
 
         group.setAttr("cardName", storeCard.name);
         group.setAttr("cardCategory", storeCard.category);
         group.setAttr("seatId", seat.id);
         group.setAttr("isPlayed", false);
+        group.setAttr("cardScale", cardScale);
 
         const { categoryText, nameText } = createCardTextNodes(
           storeCard.name,
@@ -871,6 +909,10 @@ const RoomTable = forwardRef<
       }
     }
 
+    for (let index = cards.length - 1; index >= 0; index--) {
+      cardNodesRef.current.get(cards[index].id)?.moveToTop();
+    }
+
     return cards;
   }
 
@@ -887,7 +929,7 @@ const RoomTable = forwardRef<
 
   function jumpToSpreadEnd(cards: CardData[], seat: Seat) {
     const startX = getHandStartX(seat.x, cards.length);
-    const y = seat.y + 120;
+    const y = getHandY(seat);
 
     for (const [i, card] of cards.entries()) {
       const node = cardNodesRef.current.get(card.id);
@@ -919,9 +961,12 @@ const RoomTable = forwardRef<
 
         const node = cardNodesRef.current.get(card.id);
         if (!node) continue;
-
+        const cardScale =
+          (node.getAttr("cardScale") as number | undefined) ?? 1;
         node.x(card.startX + (card.targetX - card.startX) * ease);
         node.y(card.startY + (card.targetY - card.startY) * ease);
+        const scale = 1 + (cardScale - 1) * ease;
+        node.scale({ x: scale, y: scale });
 
         if (t < 1) active = true;
       }
@@ -946,7 +991,7 @@ const RoomTable = forwardRef<
     }
 
     const startX = getHandStartX(seat.x, cards.length);
-    const y = seat.y + 120;
+    const y = getHandY(seat) + 15;
 
     const targets = new Map<string, { x: number; y: number }>();
     cards.forEach((c, i) => {
@@ -1024,6 +1069,7 @@ const RoomTable = forwardRef<
   const startDealAnimationFromOffset = async (startedAt: number) => {
     const layer = layerRef.current;
     if (!layer) return;
+    isAnimatingRef.current = true;
 
     const elapsed = Date.now() - startedAt;
     const playerCount = Object.keys(room.players).length;
@@ -1032,6 +1078,7 @@ const RoomTable = forwardRef<
     // animation already finished — just render final state
     if (elapsed >= totalDuration) {
       renderCardsImmediately();
+      isAnimatingRef.current = false;
       return;
     }
 
@@ -1060,6 +1107,7 @@ const RoomTable = forwardRef<
     }
 
     enableLocalCardClicks();
+    isAnimatingRef.current = false;
   };
 
   // ─── ABLY ──────────────────────────────────────────────────────────────────
@@ -1072,23 +1120,36 @@ const RoomTable = forwardRef<
   // ─── TRIGGER ───────────────────────────────────────────────────────────────
 
   async function deal() {
-    const res = await fetch(`/api/room/${roomId}/deal-cards`, {
-      method: "POST",
-      body: JSON.stringify({ roomId, room }),
-    });
+    if (isAnimatingRef.current) return;
+    isAnimatingRef.current = true;
+    cardNodesRef.current.forEach((node) => node.destroy());
+    cardNodesRef.current.clear();
+    layerRef.current?.draw();
 
-    const json: { data?: { dealStartedAt: number }; error?: string } =
-      await res.json();
+    try {
+      const res = await fetch(`/api/room/${roomId}/deal-cards`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomId, room }),
+      });
 
-    if (!res.ok || !json.data) {
-      throw new Error(json.error ?? "Failed to deal cards");
+      const json: { data?: { dealStartedAt: number }; error?: string } =
+        await res.json();
+
+      if (!res.ok || !json.data) {
+        throw new Error(json.error ?? "Failed to deal cards");
+      }
+
+      isAnimatingRef.current = false;
+      await channel.publish("deal-start", {
+        startedAt: json.data.dealStartedAt,
+      });
+    } catch (error) {
+      isAnimatingRef.current = false;
+      renderCardsImmediately();
+      console.error("Failed to deal cards:", error);
     }
-
-    await channel.publish("deal-start", {
-      startedAt: json.data.dealStartedAt,
-    });
   }
-
 
   return (
     <div
@@ -1128,7 +1189,7 @@ const RoomTable = forwardRef<
             <Text
               text={statusText}
               x={layout.center.x - 110}
-              y={layout.center.y - CARD_HEIGHT}
+              y={layout.center.y - CARD_HEIGHT * 1.8}
               width={220}
               align="center"
               fontSize={16}
@@ -1146,7 +1207,10 @@ const RoomTable = forwardRef<
                 x={-70}
                 y={40}
                 width={140}
+                height={18}
                 align="center"
+                wrap="none"
+                ellipsis
               />
             </Group>
           ))}

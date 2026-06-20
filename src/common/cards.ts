@@ -1,5 +1,5 @@
-export const CARD_WIDTH = 100;
-export const CARD_HEIGHT = 140;
+export const CARD_WIDTH = 90;
+export const CARD_HEIGHT = 120;
 
 export const CARD_GAP = 6;
 
@@ -14,6 +14,10 @@ export const FLIP_DURATION = 400;
 export const FLIP_STAGGER = 80;
 
 export const OPPONENT_OFFSET_Y = -110;
+
+export const OPPONENT_HAND_OFFSET_Y = -70;
+export const OPPONENT_CARD_OFFSET_X = -20;
+export const OPPONENT_CARD_SCALE = 0.50;
 
 export function getTotalAnimationDuration(playerCount: number): number {
   const dealDuration =

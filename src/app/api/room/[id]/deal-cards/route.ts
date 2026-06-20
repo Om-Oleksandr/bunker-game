@@ -5,6 +5,8 @@ import player_cards from "@/cards/bunker_data.json";
 import { kv } from "@vercel/kv";
 import { nanoid } from "nanoid";
 
+const DEAL_START_BUFFER = 750;
+
 function drawFromCategory(deck: string[]) {
   const index = Math.floor(Math.random() * deck.length);
   const [card] = deck.splice(index, 1);
@@ -20,7 +22,8 @@ export async function POST(req: NextRequest) {
 
     const copiedCards = cloneDeep(player_cards);
     for (const player of Object.values(updated)) {
-      if (!player.cards) player.cards = [];
+      player.cards = [];
+      player.playedCards = [];
 
       for (const category of Object.keys(copiedCards)) {
         const deck = copiedCards[category as keyof typeof copiedCards];
@@ -42,7 +45,9 @@ export async function POST(req: NextRequest) {
     const newRoom = structuredClone(room);
     newRoom.players = updated;
     newRoom.phase = "dealing";
-    newRoom.dealStartedAt = Date.now();
+    newRoom.dealStartedAt = Date.now() + DEAL_START_BUFFER;
+    newRoom.activeCardPlay = null;
+    newRoom.turnAvailableAt = null;
 
     await kv.set(`room:${roomId}`, newRoom);
 

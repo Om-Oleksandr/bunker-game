@@ -21,10 +21,10 @@ function subscribeToNickname(onStoreChange: () => void) {
 }
 
 export function useNickname() {
-  const nickname = useSyncExternalStore(
+  const nickname = useSyncExternalStore<string | null | undefined>(
     subscribeToNickname,
     getNicknameSnapshot,
-    () => null,
+    () => undefined,
   );
 
   const saveNickname = useCallback((value: string) => {

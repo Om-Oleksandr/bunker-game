@@ -9,11 +9,11 @@ import RoomTable, { RoomTableHandle } from "./RoomTable";
 import { InboundMessage } from "ably";
 import { updateRoom } from "@/app/actions/kv";
 import { nanoid } from "nanoid";
-import NicknamePrompt from "@/components/NicknamePrompt";
+
 import { useNickname } from "@/hooks/useNickname";
 
 export default function Room({ roomId }: { roomId: string }) {
-  const { nickname, saveNickname } = useNickname();
+  const { nickname } = useNickname();
   const ably = getAblyClient();
   const channel = ably?.channels.get(`room:${roomId}`);
   const [userId] = useState(() => {
@@ -129,10 +129,6 @@ export default function Room({ roomId }: { roomId: string }) {
         });
     });
   }, [room, userId, roomId, channel, refetch]);
-
-  if (!nickname) {
-    return <NicknamePrompt onSubmit={saveNickname} />;
-  }
 
   if (!room || !channel || !userId) {
     return <>loading</>;

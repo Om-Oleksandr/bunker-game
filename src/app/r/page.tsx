@@ -26,7 +26,11 @@ export default function Page() {
     }
   };
 
-  if (!nickname) {
+  if (nickname === undefined) {
+    return null;
+  }
+
+  if (nickname === null) {
     return (
       <NicknamePrompt
         onSubmit={saveNickname}
