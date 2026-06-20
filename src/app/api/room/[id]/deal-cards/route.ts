@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
           name: cardName,
           category,
           isPlayed: false,
+          playedOrder: null,
         });
       }
     }

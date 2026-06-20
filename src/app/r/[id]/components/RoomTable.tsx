@@ -1,6 +1,6 @@
 "use client";
 
-import { IRoom } from "@/types/common";
+import { IActiveCardPlay, IRoom } from "@/types/common";
 import {
   forwardRef,
   useCallback,
@@ -32,18 +32,17 @@ import { RealtimeChannel } from "ably";
 // Bottom row: 4 cards, top row: 3 cards, filling left-to-right bottom-first.
 const SLOT_COLS_BOTTOM = 4;
 const SLOT_COLS_TOP = 3;
-const SLOT_TOTAL = SLOT_COLS_BOTTOM + SLOT_COLS_TOP; // 7
-const SLOT_W = CARD_WIDTH + 4; // slight padding between slots
-const SLOT_H = CARD_HEIGHT + 4;
-const SLOT_GAP_X = 6; // horizontal gap between slots
-const SLOT_GAP_Y = 6; // vertical gap between rows
-// Y offset upward from the player circle centre to the bottom row
-const SLOT_OFFSET_Y = 90; // tune to taste
+
+const SLOT_OFFSET_Y = 120; // tune to taste
 
 // Animation durations for card-play events (ms)
 const PLAY_TRAVEL_DURATION = 450; // card moving from hand to slot (or to centre)
 const PLAY_FLIP_DURATION = 300; // the reveal flip at board centre
-const PLAY_RETURN_DURATION = 450; // opponent card returning from centre to slot
+const MIN_SCENE_WIDTH = 900;
+const MIN_SCENE_HEIGHT = 720;
+const MAX_SCENE_SCALE = 1.15;
+const SCENE_PADDING = 24;
+const LOCAL_HAND_BOTTOM_INSET = 88;
 
 // ─── New helper: compute the 7 slot positions for a given seat ────────────────
 
@@ -59,30 +58,26 @@ const PLAY_RETURN_DURATION = 450; // opponent card returning from centre to slot
  */
 function getSlotPositions(seat: Seat): { x: number; y: number }[] {
   const positions: { x: number; y: number }[] = [];
-
-  // Bottom row: 4 slots
-  const bottomRowWidth =
-    SLOT_COLS_BOTTOM * SLOT_W + (SLOT_COLS_BOTTOM - 1) * SLOT_GAP_X;
-  const bottomRowStartX = seat.x - bottomRowWidth / 2;
-  // For local player slots open upward (negative Y), for opponents downward.
-  const dir = seat.isLocal ? -1 : 1;
-  const bottomRowY = seat.y - dir * SLOT_OFFSET_Y;
+  const direction = seat.isLocal ? -1 : 1;
+  const cardStrideX = CARD_WIDTH + CARD_GAP;
+  const cardStrideY = CARD_HEIGHT + CARD_GAP;
+  const bottomRowStartX = seat.x - ((SLOT_COLS_BOTTOM - 1) * cardStrideX) / 2;
+  const bottomRowY = seat.y + direction * SLOT_OFFSET_Y;
 
   for (let i = 0; i < SLOT_COLS_BOTTOM; i++) {
     positions.push({
-      x: bottomRowStartX + i * (SLOT_W + SLOT_GAP_X),
+      x: bottomRowStartX + i * cardStrideX,
       y: bottomRowY,
     });
   }
 
   // Top row: 3 slots (centred above the bottom row)
-  const topRowWidth = SLOT_COLS_TOP * SLOT_W + (SLOT_COLS_TOP - 1) * SLOT_GAP_X;
-  const topRowStartX = seat.x - topRowWidth / 2;
-  const topRowY = bottomRowY - dir * (SLOT_H + SLOT_GAP_Y);
+  const topRowStartX = seat.x - ((SLOT_COLS_TOP - 1) * cardStrideX) / 2;
+  const topRowY = bottomRowY + direction * cardStrideY;
 
   for (let i = 0; i < SLOT_COLS_TOP; i++) {
     positions.push({
-      x: topRowStartX + i * (SLOT_W + SLOT_GAP_X),
+      x: topRowStartX + i * cardStrideX,
       y: topRowY,
     });
   }
@@ -94,16 +89,6 @@ function getSlotPositions(seat: Seat): { x: number; y: number }[] {
  * Returns the next free slot index (0–6) for a seat, or -1 when full.
  * Slots fill left-to-right, bottom row first (indices 0, 1, 2, 3, 4, 5, 6).
  */
-function getNextFreeSlotIndex(
-  occupiedSlots: Map<string, Set<number>>, // seatId → occupied slot indices
-  seatId: string,
-): number {
-  const occupied = occupiedSlots.get(seatId) ?? new Set<number>();
-  for (let i = 0; i < SLOT_TOTAL; i++) {
-    if (!occupied.has(i)) return i;
-  }
-  return -1;
-}
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface CardData {
@@ -133,6 +118,10 @@ export interface RoomTableHandle {
     cardId: string;
     name: string;
     category: string;
+    slotIndex: number;
+    startedAt: number;
+    returnStartedAt: number;
+    returnedAt: number;
   }) => Promise<void>;
 }
 
@@ -164,7 +153,7 @@ function createCardRect(fill: string) {
     offsetY: CARD_HEIGHT / 2,
     cornerRadius: 6,
     fill,
-    shadowBlur: 8,
+    shadowBlur: 6,
   });
 }
 
@@ -231,26 +220,63 @@ function getCardPayload(node: Konva.Group) {
 // ─── Hooks ────────────────────────────────────────────────────────────────────
 
 function useStageSize() {
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  const sizeRef = useRef(size);
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const sceneSizeRef = useRef({
+    width: MIN_SCENE_WIDTH,
+    height: MIN_SCENE_HEIGHT,
+  });
 
   useEffect(() => {
-    const onResize = () => {
+    let resizeFrame = 0;
+    const updateViewport = () => {
+      const viewport = window.visualViewport;
       const nextSize = {
-        width: window.innerWidth,
-        height: window.innerHeight,
+        width: Math.round(viewport?.width ?? window.innerWidth),
+        height: Math.round(viewport?.height ?? window.innerHeight),
       };
-
-      sizeRef.current = nextSize;
-      setSize(nextSize);
+      setViewportSize((currentSize) =>
+        currentSize.width === nextSize.width &&
+        currentSize.height === nextSize.height
+          ? currentSize
+          : nextSize,
+      );
+    };
+    const onResize = () => {
+      window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = window.requestAnimationFrame(updateViewport);
     };
 
-    onResize();
+    updateViewport();
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    window.visualViewport?.addEventListener("resize", onResize);
+    window.screen.orientation?.addEventListener("change", onResize);
+
+    return () => {
+      window.cancelAnimationFrame(resizeFrame);
+      window.removeEventListener("resize", onResize);
+      window.visualViewport?.removeEventListener("resize", onResize);
+      window.screen.orientation?.removeEventListener("change", onResize);
+    };
   }, []);
 
-  return { size, sizeRef };
+  const scale =
+    viewportSize.width > 0 && viewportSize.height > 0
+      ? Math.min(
+          MAX_SCENE_SCALE,
+          viewportSize.width / MIN_SCENE_WIDTH,
+          viewportSize.height / MIN_SCENE_HEIGHT,
+        )
+      : 1;
+  const sceneSize = {
+    width: MIN_SCENE_WIDTH,
+    height: MIN_SCENE_HEIGHT,
+  };
+  const offset = {
+    x: (viewportSize.width - sceneSize.width * scale) / 2,
+    y: (viewportSize.height - sceneSize.height * scale) / 2,
+  };
+
+  return { viewportSize, sceneSize, sceneSizeRef, scale, offset };
 }
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
@@ -260,6 +286,14 @@ function getLayout(width: number, height: number) {
     center: { x: width / 2, y: height / 2 },
     radius: Math.min(width, height) * 0.35,
   };
+}
+
+function getHandStartX(centerX: number, cardCount: number) {
+  if (cardCount === 0) return centerX;
+
+  const totalWidth =
+    cardCount * CARD_WIDTH + (cardCount - 1) * CARD_GAP;
+  return centerX + CARD_WIDTH / 2 - totalWidth / 2;
 }
 
 function calculateSeats(
@@ -354,47 +388,68 @@ const RoomTable = forwardRef<
     channel: RealtimeChannel;
   }
 >(({ room, userId, roomId, channel }, ref) => {
-  const { size, sizeRef } = useStageSize();
+  const { viewportSize, sceneSize, sceneSizeRef, scale, offset } =
+    useStageSize();
+  const [now, setNow] = useState(() => Date.now());
 
   const layerRef = useRef<Konva.Layer>(null);
   const cardNodesRef = useRef<Map<string, Konva.Group>>(new Map());
 
-  const occupiedSlotsRef = useRef<Map<string, Set<number>>>(new Map());
   const isAnimatingRef = useRef(false);
+  const animatedPlayStartedAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const timelineEnd = room.turnAvailableAt;
+    if (!timelineEnd || Date.now() >= timelineEnd) return;
+
+    const timer = window.setInterval(() => {
+      const nextNow = Date.now();
+      setNow(nextNow);
+      if (nextNow >= timelineEnd) window.clearInterval(timer);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [room.turnAvailableAt]);
   // ─── Easing helper (reuse for card-play too) ──────────────────────────────
 
   function easeOutCubic(t: number) {
     return 1 - Math.pow(1 - t, 3);
   }
 
-  const { width, height } = size;
+  const { width, height } = sceneSize;
   const seats = calculateSeats(room.players, userId, width, height);
   const layout = getLayout(width, height);
+  const currentTurn = room.currentTurn ?? Object.keys(room.players)[0] ?? "";
+  const explanationEndsAt = room.activeCardPlay?.returnStartedAt ?? 0;
+  const statusText =
+    room.activeCardPlay && now < explanationEndsAt
+      ? `Explain your card: ${Math.ceil((explanationEndsAt - now) / 1000)}s`
+      : room.turnAvailableAt && now < room.turnAvailableAt
+        ? `Next turn in ${Math.ceil((room.turnAvailableAt - now) / 1000)}s`
+        : currentTurn === userId
+          ? "Your turn"
+          : "Waiting for another player";
 
   const getSeats = useCallback((): Seat[] => {
-    const { width, height } = sizeRef.current;
+    const { width, height } = sceneSizeRef.current;
     return calculateSeats(room.players, userId, width, height);
-  }, [room.players, sizeRef, userId]);
-  
+  }, [room.players, sceneSizeRef, userId]);
+
   // ----play card
   const animateCardPlay = useCallback(
-    async (payload: {
-      seatId: string;
-      cardId: string;
-      name: string;
-      category: string;
-    }) => {
-
+    async (payload: IActiveCardPlay) => {
       isAnimatingRef.current = true;
       try {
         const layer = layerRef.current;
         if (!layer) return;
 
-        const { seatId, cardId, name, category } = payload;
+        const { seatId, cardId, slotIndex, returnStartedAt, returnedAt } =
+          payload;
 
         // Find the Konva node for this card (it was placed during deal animation)
         const node = cardNodesRef.current.get(cardId);
         if (!node) return;
+        if (animatedPlayStartedAtRef.current === payload.startedAt) return;
+        animatedPlayStartedAtRef.current = payload.startedAt;
 
         // Find the seat so we can access its slot positions
         const seats = getSeats();
@@ -402,33 +457,71 @@ const RoomTable = forwardRef<
         if (!seat) return;
 
         // Determine target slot ─────────────────────────────────────────────
-        const slotIndex = getNextFreeSlotIndex(
-          occupiedSlotsRef.current,
-          seatId,
-        );
         if (slotIndex === -1) return; // all 7 slots full, ignore
 
-        // Mark the slot as occupied immediately so concurrent plays don't clash
-        if (!occupiedSlotsRef.current.has(seatId)) {
-          occupiedSlotsRef.current.set(seatId, new Set());
-        }
-        occupiedSlotsRef.current.get(seatId)!.add(slotIndex);
-
         const slotPositions = getSlotPositions(seat);
-        const targetSlot = slotPositions[slotIndex];
+        const cardIndex = room.players[seatId].cards.findIndex(
+          ({ id }) => id === cardId,
+        );
+        const targetSlot = seat.isLocal
+          ? slotPositions[slotIndex]
+          : {
+              x: seat.x + Math.max(cardIndex, 0) * 8,
+              y: seat.y,
+            };
+        const { width, height } = sceneSizeRef.current;
+        const centerX = width / 2;
+        const centerY = height / 2;
 
         // Disable click while animating so the card can't be played twice
         node.off("click tap mouseenter mouseleave");
+        node.setAttr("isPlayed", true);
 
         if (seat.isLocal) {
           // ── LOCAL PLAYER: direct travel to slot ────────────────────────────
           const fromX = node.x();
           const fromY = node.y();
+          const remainingCards = room.players[seatId].cards.filter(
+            (card) => !card.isPlayed && card.id !== cardId,
+          );
+          const remainingStartX = getHandStartX(
+            seat.x,
+            remainingCards.length,
+          );
+          const handY = seat.y + SLOT_OFFSET_Y;
+          const handTransitions = remainingCards.flatMap((card, index) => {
+            const cardNode = cardNodesRef.current.get(card.id);
+            if (!cardNode) return [];
+
+            cardNode.off("click tap mouseenter mouseleave");
+            return [
+              {
+                node: cardNode,
+                fromX: cardNode.x(),
+                fromY: cardNode.y(),
+                toX:
+                  remainingStartX + index * (CARD_WIDTH + CARD_GAP),
+                toY: handY,
+              },
+            ];
+          });
 
           await waitForAnimation(layer, (elapsed) => {
             const t = Math.min(elapsed / PLAY_TRAVEL_DURATION, 1);
-            node.x(fromX + (targetSlot.x - fromX) * easeOutCubic(t));
-            node.y(fromY + (targetSlot.y - fromY) * easeOutCubic(t));
+            const easedTime = easeOutCubic(t);
+            node.x(fromX + (targetSlot.x - fromX) * easedTime);
+            node.y(fromY + (targetSlot.y - fromY) * easedTime);
+
+            handTransitions.forEach((transition) => {
+              transition.node.x(
+                transition.fromX +
+                  (transition.toX - transition.fromX) * easedTime,
+              );
+              transition.node.y(
+                transition.fromY +
+                  (transition.toY - transition.fromY) * easedTime,
+              );
+            });
             return t < 1;
           });
 
@@ -438,53 +531,61 @@ const RoomTable = forwardRef<
           // ── OPPONENT CARD: centre → flip → return to slot ─────────────────
           const fromX = node.x();
           const fromY = node.y();
+          const revealCompletedAt =
+            payload.startedAt + PLAY_TRAVEL_DURATION + PLAY_FLIP_DURATION;
+          const resumeAtCenter = Date.now() >= revealCompletedAt;
 
-          // Step 1: travel to board centre
-          const { width, height } = sizeRef.current;
-          const centerX = width / 2;
-          const centerY = height / 2;
+          if (resumeAtCenter) {
+            const rect = node.findOne(".cardRect") as Konva.Rect | undefined;
+            node.position({ x: centerX, y: centerY });
+            node.scaleX(1);
+            if (rect) rect.fill("#fee2e2");
+            revealCardText(node);
+          } else {
+            // Step 1: travel to board centre
+            await waitForAnimation(layer, (elapsed) => {
+              const t = Math.min(elapsed / PLAY_TRAVEL_DURATION, 1);
+              node.x(fromX + (centerX - fromX) * easeOutCubic(t));
+              node.y(fromY + (centerY - fromY) * easeOutCubic(t));
+              return t < 1;
+            });
 
+            // Step 2: flip to reveal
+            const rect = node.findOne(".cardRect") as Konva.Rect | undefined;
+
+            await waitForAnimation(layer, (elapsed) => {
+              const t = Math.min(elapsed / PLAY_FLIP_DURATION, 1);
+
+              if (t < 0.5) {
+                node.scaleX(1 - t * 2);
+              } else {
+                if (rect) rect.fill("#fee2e2");
+                revealCardText(node);
+                node.scaleX((t - 0.5) * 2);
+              }
+
+              return t < 1;
+            });
+
+            node.scaleX(1);
+          }
+
+          await new Promise((resolve) =>
+            window.setTimeout(
+              resolve,
+              Math.max(returnStartedAt - Date.now(), 0),
+            ),
+          );
+
+          // Step 3: return to the card's original hand position
           await waitForAnimation(layer, (elapsed) => {
-            const t = Math.min(elapsed / PLAY_TRAVEL_DURATION, 1);
-            node.x(fromX + (centerX - fromX) * easeOutCubic(t));
-            node.y(fromY + (centerY - fromY) * easeOutCubic(t));
-            return t < 1;
-          });
-
-          // Step 2: flip to reveal (same scaleX trick used during deal)
-          const rect = node.findOne(".cardRect") as Konva.Rect | undefined;
-
-          await waitForAnimation(layer, (elapsed) => {
-            const t = Math.min(elapsed / PLAY_FLIP_DURATION, 1);
-
-            if (t < 0.5) {
-              // First half: squish toward zero
-              node.scaleX(1 - t * 2);
-            } else {
-              // Second half: expand back, swap to face-up colour and show text
-              if (rect) rect.fill("#fee2e2");
-              revealCardText(node); // sets name + category on the Text nodes
-              node.scaleX((t - 0.5) * 2);
-            }
-
-            return t < 1;
-          });
-
-          // Ensure scaleX is exactly 1 after flip
-          node.scaleX(1);
-
-          // Step 3: travel from centre to the player's slot
-          await waitForAnimation(layer, (elapsed) => {
-            const t = Math.min(elapsed / PLAY_RETURN_DURATION, 1);
-            node.x(centerX + (fromX - centerX) * easeOutCubic(t)); // ← fromX not targetSlot.x
-            node.y(centerY + (fromY - centerY) * easeOutCubic(t)); // ← fromY not targetSlot.y
+            const duration = Math.max(returnedAt - Date.now(), 1);
+            const t = Math.min(elapsed / duration, 1);
+            node.x(centerX + (targetSlot.x - centerX) * easeOutCubic(t));
+            node.y(centerY + (targetSlot.y - centerY) * easeOutCubic(t));
             return t < 1;
           });
         }
-        await fetch(`/api/room/${roomId}/play-card`, {
-          method: "POST",
-          body: JSON.stringify({ seatId, cardId }),
-        });
       } catch (err) {
         console.error(err);
       } finally {
@@ -492,20 +593,47 @@ const RoomTable = forwardRef<
         // renderCardsImmediately();
       }
     },
-    [getSeats, sizeRef],
+    [getSeats, room.players, sceneSizeRef],
   );
+
+  useEffect(() => {
+    const play = room.activeCardPlay;
+    if (!play || Date.now() >= play.returnedAt) return;
+    if (animatedPlayStartedAtRef.current === play.startedAt) return;
+
+    requestAnimationFrame(() => {
+      void animateCardPlay(play);
+    });
+  }, [animateCardPlay, room.activeCardPlay]);
+
   const enableCardClick = useCallback(
     (node: Konva.Group, cardId: string) => {
       node.off("click tap mouseenter mouseleave");
-      node.on("click tap", () => {
-        channel
-          .publish("card-played", {
-            ...getCardPayload(node),
-            cardId,
-          })
-          .catch((err) => {
-            console.error("Failed to publish card-played:", err);
+      node.on("click tap", async () => {
+        if (node.getAttr("isSubmitting")) return;
+        node.setAttr("isSubmitting", true);
+
+        try {
+          const payload = { ...getCardPayload(node), cardId };
+          const response = await fetch(`/api/room/${roomId}/play-card`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
           });
+          const json: {
+            data?: { play: IActiveCardPlay };
+            error?: string;
+          } = await response.json();
+
+          if (!response.ok || !json.data) {
+            throw new Error(json.error ?? "Failed to play card");
+          }
+
+          await channel.publish("card-played", json.data.play);
+        } catch (err) {
+          console.error("Failed to play card:", err);
+          node.setAttr("isSubmitting", false);
+        }
       });
       node.on("mouseenter", () => {
         const stage = node.getStage();
@@ -516,16 +644,23 @@ const RoomTable = forwardRef<
         if (stage) stage.container().style.cursor = "default";
       });
     },
-    [channel],
+    [channel, roomId],
   );
 
   const enableLocalCardClicks = useCallback(() => {
     cardNodesRef.current.forEach((node, cardId) => {
-      if (node.getAttr("seatId") === userId) {
+      if (node.getAttr("seatId") !== userId) return;
+
+      node.off("click tap mouseenter mouseleave");
+      const canPlay =
+        currentTurn === userId &&
+        (!room.turnAvailableAt || now >= room.turnAvailableAt);
+
+      if (canPlay) {
         enableCardClick(node, cardId);
       }
     });
-  }, [enableCardClick, userId]);
+  }, [currentTurn, enableCardClick, now, room.turnAvailableAt, userId]);
 
   // ─── RENDER IMMEDIATELY (on reload after animation done) ──────────────────
 
@@ -543,24 +678,33 @@ const RoomTable = forwardRef<
       const cards = room.players[seat.id]?.cards ?? [];
 
       const handCards = cards.filter((c) => !c.isPlayed);
-      const playedCards = cards.filter((c) => c.isPlayed);
+      const playedCards = cards
+        .filter((c) => c.isPlayed)
+        .sort((firstCard, secondCard) => {
+          const firstOrder =
+            firstCard.playedOrder ?? cards.indexOf(firstCard);
+          const secondOrder =
+            secondCard.playedOrder ?? cards.indexOf(secondCard);
+          return firstOrder - secondOrder;
+        });
 
       // ── Hand cards ──────────────────────────────────────────────────────────
-      const totalWidth = handCards.length * (CARD_WIDTH + CARD_GAP) - CARD_GAP;
-      const startX = seat.x - totalWidth / 2;
+      const startX = getHandStartX(seat.x, handCards.length);
       const y = seat.isLocal ? seat.y + 120 : seat.y;
 
-      handCards.forEach((card, index) => {
+      (seat.isLocal ? handCards : []).forEach((card, index) => {
+        const originalIndex = cards.findIndex(({ id }) => id === card.id);
         const group = new Konva.Group({
           x: seat.isLocal
             ? startX + index * (CARD_WIDTH + CARD_GAP)
-            : seat.x + index * 8, // stacked for opponents
+            : seat.x + originalIndex * 8,
           y,
         });
 
         group.setAttr("cardName", card.name);
         group.setAttr("cardCategory", card.category);
         group.setAttr("seatId", seat.id);
+        group.setAttr("isPlayed", false);
 
         const { categoryText, nameText } = createCardTextNodes(
           card.name,
@@ -575,10 +719,6 @@ const RoomTable = forwardRef<
         const cardId = card.id;
         layerRef.current!.add(group);
         cardNodesRef.current.set(cardId, group);
-
-        if (seat.isLocal) {
-          enableCardClick(group, cardId);
-        }
       });
 
       // ── Played cards (in slots) ─────────────────────────────────────────────
@@ -596,6 +736,7 @@ const RoomTable = forwardRef<
           group.setAttr("cardName", card.name);
           group.setAttr("cardCategory", card.category);
           group.setAttr("seatId", seat.id);
+          group.setAttr("isPlayed", true);
 
           const { categoryText, nameText } = createCardTextNodes(
             card.name,
@@ -612,38 +753,51 @@ const RoomTable = forwardRef<
           cardNodesRef.current.set(cardId, group);
         });
       } else {
-        playedCards.forEach((card, index) => {
+        cards.forEach((card, originalIndex) => {
+          const activeInCenter =
+            card.isPlayed &&
+            room.activeCardPlay?.cardId === card.id &&
+            now < room.activeCardPlay.returnStartedAt;
+
           const group = new Konva.Group({
-            x: seat.isLocal
-              ? startX + index * (CARD_WIDTH + CARD_GAP)
-              : seat.x + index * 8, // stacked for opponents
-            y,
+            x: activeInCenter
+              ? sceneSizeRef.current.width / 2
+              : seat.x + originalIndex * 8,
+            y: activeInCenter ? sceneSizeRef.current.height / 2 : seat.y,
           });
 
           group.setAttr("cardName", card.name);
           group.setAttr("cardCategory", card.category);
           group.setAttr("seatId", seat.id);
+          group.setAttr("isPlayed", card.isPlayed);
 
           const { categoryText, nameText } = createCardTextNodes(
             card.name,
             card.category,
-            true, // ← false for opponents = face-down, true for local = face-up
+            card.isPlayed,
           );
 
-          group.add(createCardRect("#fee2e2")); // red=local, blue=opponent
+          group.add(createCardRect(card.isPlayed ? "#fee2e2" : "#1e40af"));
           group.add(categoryText);
           group.add(nameText);
 
           const cardId = card.id;
           layerRef.current!.add(group);
           cardNodesRef.current.set(cardId, group);
-
         });
       }
     }
 
+    enableLocalCardClicks();
     layerRef.current!.draw();
-  }, [enableCardClick, getSeats, room.players]);
+  }, [
+    enableLocalCardClicks,
+    getSeats,
+    now,
+    room.activeCardPlay,
+    room.players,
+    sceneSizeRef,
+  ]);
 
   useEffect(() => {
     if (!layerRef.current) return;
@@ -651,13 +805,19 @@ const RoomTable = forwardRef<
     if (hasCards && room.phase !== "dealing") {
       renderCardsImmediately();
     }
-  }, [hasCards, renderCardsImmediately, room.phase, size]);
+  }, [
+    hasCards,
+    renderCardsImmediately,
+    room.phase,
+    sceneSize.height,
+    sceneSize.width,
+  ]);
 
   // ─── MOUNT CARDS ──────────────────────────────────────────────────────────
 
   function mountCards(seats: Seat[]): CardData[] {
     const layer = layerRef.current!;
-    const { width, height } = sizeRef.current;
+    const { width, height } = sceneSizeRef.current;
 
     cardNodesRef.current.forEach((n) => n.destroy());
     cardNodesRef.current.clear();
@@ -694,6 +854,7 @@ const RoomTable = forwardRef<
         group.setAttr("cardName", storeCard.name);
         group.setAttr("cardCategory", storeCard.category);
         group.setAttr("seatId", seat.id);
+        group.setAttr("isPlayed", false);
 
         const { categoryText, nameText } = createCardTextNodes(
           storeCard.name,
@@ -727,8 +888,7 @@ const RoomTable = forwardRef<
   }
 
   function jumpToSpreadEnd(cards: CardData[], seat: Seat) {
-    const totalWidth = cards.length * (CARD_WIDTH + CARD_GAP) - CARD_GAP;
-    const startX = seat.x - totalWidth / 2;
+    const startX = getHandStartX(seat.x, cards.length);
     const y = seat.y + 120;
 
     for (const [i, card] of cards.entries()) {
@@ -787,8 +947,7 @@ const RoomTable = forwardRef<
       if (node) snapshots.set(c.id, { x: node.x(), y: node.y() });
     }
 
-    const totalWidth = cards.length * (CARD_WIDTH + CARD_GAP) - CARD_GAP;
-    const startX = seat.x - totalWidth / 2;
+    const startX = getHandStartX(seat.x, cards.length);
     const y = seat.y + 120;
 
     const targets = new Map<string, { x: number; y: number }>();
@@ -932,14 +1091,31 @@ const RoomTable = forwardRef<
     });
   }
 
-  // ─── RENDER ────────────────────────────────────────────────────────────────
 
   return (
-    <>
-      <button onClick={deal}>deal cards</button>
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        overflow: "hidden",
+        background: "#145a32",
+      }}
+    >
+      <button
+        onClick={deal}
+        style={{ position: "absolute", top: 12, left: 12, zIndex: 1 }}
+      >
+        deal cards
+      </button>
 
-      <Stage width={width} height={height}>
-        <Layer ref={layerRef}>
+      <Stage width={viewportSize.width} height={viewportSize.height}>
+        <Layer
+          ref={layerRef}
+          x={offset.x}
+          y={offset.y}
+          scaleX={scale}
+          scaleY={scale}
+        >
           <Rect width={width} height={height} fill="#145a32" />
 
           <Ellipse
@@ -950,6 +1126,19 @@ const RoomTable = forwardRef<
             fill="#de0efa"
           />
 
+          {hasCards && (
+            <Text
+              text={statusText}
+              x={layout.center.x - 110}
+              y={layout.center.y - CARD_HEIGHT}
+              width={220}
+              align="center"
+              fontSize={16}
+              fontStyle="bold"
+              fill="white"
+            />
+          )}
+
           {seats.map((p) => (
             <Group key={p.id} x={p.x} y={p.y}>
               <Circle radius={32} fill="#222" />
@@ -958,7 +1147,7 @@ const RoomTable = forwardRef<
           ))}
         </Layer>
       </Stage>
-    </>
+    </div>
   );
 });
 
