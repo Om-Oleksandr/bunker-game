@@ -39,6 +39,7 @@ import {
 } from "@/common/cards";
 import { RealtimeChannel } from "ably";
 import {
+  cacheCardNode,
   createCardRect,
   createCardTextNodes,
   getCardPayload,
@@ -99,7 +100,6 @@ const RoomTable = forwardRef<
   const [membershipError, setMembershipError] = useState("");
   const [isChangingMembership, setIsChangingMembership] = useState(false);
   const [ambientGlow, setAmbientGlow] = useState(true);
-  const [showPlayerStats, setShowPlayerStats] = useState(true);
   const [isLayerReady, setIsLayerReady] = useState(false);
 
   const layerRef = useRef<Konva.Layer>(null);
@@ -178,6 +178,7 @@ const RoomTable = forwardRef<
       try {
         const layer = layerRef.current;
         if (!layer) return;
+        layer.listening(false);
 
         const { seatId, cardId, slotIndex, returnStartedAt, returnedAt } =
           payload;
@@ -348,6 +349,7 @@ const RoomTable = forwardRef<
       } catch (err) {
         console.error(err);
       } finally {
+        layerRef.current?.listening(true);
         isAnimatingRef.current = false;
         // renderCardsImmediately();
       }
@@ -470,6 +472,7 @@ const RoomTable = forwardRef<
         group.add(createCardRect(seat.isLocal ? "#fee2e2" : "#1e40af")); // red=local, blue=opponent
         group.add(categoryText);
         group.add(nameText);
+        cacheCardNode(group);
 
         const cardId = card.id;
         layerRef.current!.add(group);
@@ -502,6 +505,7 @@ const RoomTable = forwardRef<
           group.add(createCardRect("#fee2e2"));
           group.add(categoryText);
           group.add(nameText);
+          cacheCardNode(group);
 
           const cardId = card.id;
           layerRef.current!.add(group);
@@ -542,6 +546,7 @@ const RoomTable = forwardRef<
           group.add(createCardRect(card.isPlayed ? "#fee2e2" : "#1e40af"));
           group.add(categoryText);
           group.add(nameText);
+          cacheCardNode(group);
 
           const cardId = card.id;
           layerRef.current!.add(group);
@@ -609,6 +614,7 @@ const RoomTable = forwardRef<
       isAnimatingRef.current = true;
 
       if (distance < 1) {
+        layer.listening(true);
         isAnimatingRef.current = false;
         return;
       }
@@ -634,6 +640,7 @@ const RoomTable = forwardRef<
         layer.batchDraw();
         isAnimatingRef.current = false;
       }
+      layer.listening(true);
     },
     [getSeats, room.players],
   );
@@ -661,7 +668,7 @@ const RoomTable = forwardRef<
         };
 
         const card: CardData = {
-          id: `${seat.id}-${round}`,
+          id: storeCard.id,
           seatId: seat.id,
           name: storeCard.name,
           category: storeCard.category,
@@ -699,6 +706,7 @@ const RoomTable = forwardRef<
         group.add(createCardRect("#1e40af"));
         group.add(categoryText);
         group.add(nameText);
+        cacheCardNode(group);
 
         layer.add(group);
         cardNodesRef.current.set(card.id, group);
@@ -726,6 +734,7 @@ const RoomTable = forwardRef<
   const startDealAnimationFromOffset = async (startedAt: number) => {
     const layer = await waitForLayer();
     if (!layer) return false;
+    layer.listening(false);
     isAnimatingRef.current = true;
 
     const elapsed = Date.now() - startedAt;
@@ -735,6 +744,7 @@ const RoomTable = forwardRef<
     // animation already finished — just render final state
     if (elapsed >= totalDuration) {
       renderCardsImmediately();
+      layer.listening(true);
       isAnimatingRef.current = false;
       return true;
     }
@@ -776,6 +786,7 @@ const RoomTable = forwardRef<
     }
 
     enableLocalCardClicks();
+    layer.listening(true);
     isAnimatingRef.current = false;
     return true;
   };
@@ -1084,11 +1095,11 @@ const RoomTable = forwardRef<
       {viewportSize.width > 0 && viewportSize.height > 0 && (
         <Stage width={viewportSize.width} height={viewportSize.height}>
           <Layer
-            ref={attachLayer}
             x={offset.x}
             y={offset.y}
             scaleX={scale}
             scaleY={scale}
+            listening={false}
           >
             <Ellipse
               x={layout.center.x}
@@ -1164,10 +1175,6 @@ const RoomTable = forwardRef<
               const player = room.players[seat.id];
               if (!player) return null;
               const isActive = currentTurn === seat.id;
-              const remainingCards = player.cards.filter(
-                ({ isPlayed }) => !isPlayed,
-              ).length;
-
               return (
                 <Group
                   key={seat.id}
@@ -1232,6 +1239,13 @@ const RoomTable = forwardRef<
               );
             })}
           </Layer>
+          <Layer
+            ref={attachLayer}
+            x={offset.x}
+            y={offset.y}
+            scaleX={scale}
+            scaleY={scale}
+          />
         </Stage>
       )}
     </div>
