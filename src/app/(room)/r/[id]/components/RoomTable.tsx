@@ -738,18 +738,6 @@ const RoomTable = forwardRef<
     return cards;
   }
 
-  // ─── JUMP HELPERS (skip phases instantly) ─────────────────────────────────
-
-  // ─── DEAL ANIMATION ───────────────────────────────────────────────────────
-
-  // ─── SPREAD ───────────────────────────────────────────────────────────────
-
-  // ─── FLIP ─────────────────────────────────────────────────────────────────
-
-  // ─── ORCHESTRATOR (fresh start) ───────────────────────────────────────────
-
-  // ─── ORCHESTRATOR (resume from timestamp) ─────────────────────────────────
-
   const waitForLayer = useCallback(async () => {
     while (isMountedRef.current && !layerRef.current) {
       await new Promise<void>((resolve) =>
@@ -892,7 +880,7 @@ const RoomTable = forwardRef<
 
   return (
     <div
-      className={`fixed inset-0 overflow-hidden text-[#f2e8d2] ${
+      className={`fixed inset-0 overflow-hidden font-mono text-[#f2e8d2] ${
         ambientGlow
           ? "bg-[radial-gradient(circle_at_50%_35%,#263b32_0%,#111d19_48%,#070c0a_100%)]"
           : "bg-[#0c1512]"
