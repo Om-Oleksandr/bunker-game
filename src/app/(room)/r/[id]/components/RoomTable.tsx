@@ -12,6 +12,15 @@ import {
 import { Stage, Layer, Rect, Circle, Text, Group, Ellipse } from "react-konva";
 import Konva from "konva";
 import {
+  Crown,
+  FastForward,
+  Play,
+  Settings,
+  Shield,
+  Users,
+  X,
+} from "lucide-react";
+import {
   CARD_GAP,
   CARD_HEIGHT,
   CARD_WIDTH,
@@ -78,7 +87,8 @@ import {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface RoomTableHandle {
-  startDealAnimationFromOffset: (startedAt: number) => Promise<void>;
+  startDealAnimationFromOffset: (startedAt: number) => Promise<boolean>;
+  animateSkippedCardReturn: (payload: IActiveCardPlay) => Promise<void>;
   animateCardPlay: (payload: {
     // ← ADD THIS
     seatId: string;
@@ -114,12 +124,32 @@ const RoomTable = forwardRef<
   const { viewportSize, sceneSize, sceneSizeRef, scale, offset } =
     useStageSize();
   const [now, setNow] = useState(() => Date.now());
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSkipping, setIsSkipping] = useState(false);
+  const [skipError, setSkipError] = useState("");
+  const [ambientGlow, setAmbientGlow] = useState(true);
+  const [showPlayerStats, setShowPlayerStats] = useState(true);
+  const [isLayerReady, setIsLayerReady] = useState(false);
 
   const layerRef = useRef<Konva.Layer>(null);
   const cardNodesRef = useRef<Map<string, Konva.Group>>(new Map());
+  const isMountedRef = useRef(true);
 
   const isAnimatingRef = useRef(false);
   const animatedPlayStartedAtRef = useRef<number | null>(null);
+  const playAnimationVersionRef = useRef(0);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  const attachLayer = useCallback((layer: Konva.Layer | null) => {
+    layerRef.current = layer;
+    setIsLayerReady(Boolean(layer));
+  }, []);
 
   useEffect(() => {
     const timelineEnd = room.turnAvailableAt;
@@ -139,6 +169,18 @@ const RoomTable = forwardRef<
   const layout = getTableLayout(width, height);
   const currentTurn = room.currentTurn ?? Object.keys(room.players)[0] ?? "";
   const explanationEndsAt = room.activeCardPlay?.returnStartedAt ?? 0;
+  const activePlayer = room.activeCardPlay
+    ? room.players[room.activeCardPlay.seatId]
+    : null;
+  const activeCardWasPlayed = Boolean(
+    activePlayer?.cards.some(
+      ({ id, isPlayed }) => id === room.activeCardPlay?.cardId && isPlayed,
+    ),
+  );
+  const canSkipTurn =
+    room.activeCardPlay?.seatId === userId &&
+    activeCardWasPlayed &&
+    now < explanationEndsAt;
   const statusText =
     room.activeCardPlay && now < explanationEndsAt
       ? `Час: ${Math.ceil((explanationEndsAt - now) / 1000)}s`
@@ -169,6 +211,7 @@ const RoomTable = forwardRef<
         if (!node) return;
         if (animatedPlayStartedAtRef.current === payload.startedAt) return;
         animatedPlayStartedAtRef.current = payload.startedAt;
+        const animationVersion = ++playAnimationVersionRef.current;
 
         // Find the seat so we can access its slot positions
         const seats = getSeats();
@@ -221,6 +264,8 @@ const RoomTable = forwardRef<
           });
 
           await waitForAnimation(layer, (elapsed) => {
+            if (animationVersion !== playAnimationVersionRef.current)
+              return false;
             const t = Math.min(elapsed / PLAY_TRAVEL_DURATION, 1);
             const easedTime = easeOutCubic(t);
             node.x(fromX + (targetSlot.x - fromX) * easedTime);
@@ -265,6 +310,8 @@ const RoomTable = forwardRef<
           } else {
             // Step 1: travel to board centre
             await waitForAnimation(layer, (elapsed) => {
+              if (animationVersion !== playAnimationVersionRef.current)
+                return false;
               const t = Math.min(elapsed / PLAY_TRAVEL_DURATION, 1);
               const easedTime = easeOutCubic(t);
               const scale =
@@ -280,6 +327,8 @@ const RoomTable = forwardRef<
             const rect = node.findOne(".cardRect") as Konva.Rect | undefined;
 
             await waitForAnimation(layer, (elapsed) => {
+              if (animationVersion !== playAnimationVersionRef.current)
+                return false;
               const t = Math.min(elapsed / PLAY_FLIP_DURATION, 1);
 
               if (t < 0.5) {
@@ -303,9 +352,13 @@ const RoomTable = forwardRef<
             ),
           );
 
+          if (animationVersion !== playAnimationVersionRef.current) return;
+
           // Step 3: return to the card's original hand position
           const returnDuration = Math.max(returnedAt - Date.now(), 1);
           await waitForAnimation(layer, (elapsed) => {
+            if (animationVersion !== playAnimationVersionRef.current)
+              return false;
             const t = Math.min(elapsed / returnDuration, 1);
             const easedTime = easeOutCubic(t);
             const scale =
@@ -533,18 +586,81 @@ const RoomTable = forwardRef<
   ]);
 
   useEffect(() => {
-    if (!layerRef.current) return;
+    if (!isLayerReady || !layerRef.current) return;
     if (isAnimatingRef.current) return;
     if (hasCards && room.phase !== "dealing") {
       renderCardsImmediately();
     }
   }, [
     hasCards,
+    isLayerReady,
     renderCardsImmediately,
     room.phase,
     sceneSize.height,
     sceneSize.width,
   ]);
+
+  const animateSkippedCardReturn = useCallback(
+    async (payload: IActiveCardPlay) => {
+      const layer = layerRef.current;
+      const node = cardNodesRef.current.get(payload.cardId);
+      const seat = getSeats().find(({ id }) => id === payload.seatId);
+      if (!layer || !node || !seat) return;
+
+      const playerCards = room.players[payload.seatId]?.cards ?? [];
+      const cardIndex = playerCards.findIndex(
+        ({ id }) => id === payload.cardId,
+      );
+      const localSlot = getSlotPositions(seat)[payload.slotIndex];
+      const target = seat.isLocal
+        ? localSlot
+        : {
+            x: getOpponentCardX(seat, cardIndex),
+            y: getHandY(seat),
+          };
+      if (!target) return;
+
+      const animationVersion = ++playAnimationVersionRef.current;
+      animatedPlayStartedAtRef.current = payload.startedAt;
+      const fromX = node.x();
+      const fromY = node.y();
+      const fromScaleX = node.scaleX();
+      const fromScaleY = node.scaleY();
+      const targetScale = seat.isLocal ? 1 : OPPONENT_CARD_SCALE;
+      const distance = Math.hypot(target.x - fromX, target.y - fromY);
+
+      node.off("click tap mouseenter mouseleave");
+      isAnimatingRef.current = true;
+
+      if (distance < 1) {
+        isAnimatingRef.current = false;
+        return;
+      }
+
+      const duration = Math.max(payload.returnedAt - Date.now(), 240);
+      await waitForAnimation(layer, (elapsed) => {
+        if (animationVersion !== playAnimationVersionRef.current) return false;
+
+        const progress = Math.min(elapsed / duration, 1);
+        const easedProgress = easeOutCubic(progress);
+        node.x(fromX + (target.x - fromX) * easedProgress);
+        node.y(fromY + (target.y - fromY) * easedProgress);
+        node.scale({
+          x: fromScaleX + (targetScale - fromScaleX) * easedProgress,
+          y: fromScaleY + (targetScale - fromScaleY) * easedProgress,
+        });
+        return progress < 1;
+      });
+
+      if (animationVersion === playAnimationVersionRef.current) {
+        node.position(target);
+        node.scale({ x: targetScale, y: targetScale });
+        layer.batchDraw();
+        isAnimatingRef.current = false;
+      }
+    },
+    [getSeats, room.players],
+  );
 
   // ─── MOUNT CARDS ──────────────────────────────────────────────────────────
 
@@ -634,9 +750,18 @@ const RoomTable = forwardRef<
 
   // ─── ORCHESTRATOR (resume from timestamp) ─────────────────────────────────
 
+  const waitForLayer = useCallback(async () => {
+    while (isMountedRef.current && !layerRef.current) {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+    }
+    return layerRef.current;
+  }, []);
+
   const startDealAnimationFromOffset = async (startedAt: number) => {
-    const layer = layerRef.current;
-    if (!layer) return;
+    const layer = await waitForLayer();
+    if (!layer) return false;
     isAnimatingRef.current = true;
 
     const elapsed = Date.now() - startedAt;
@@ -647,7 +772,7 @@ const RoomTable = forwardRef<
     if (elapsed >= totalDuration) {
       renderCardsImmediately();
       isAnimatingRef.current = false;
-      return;
+      return true;
     }
 
     const seats = getSeats();
@@ -688,6 +813,7 @@ const RoomTable = forwardRef<
 
     enableLocalCardClicks();
     isAnimatingRef.current = false;
+    return true;
   };
 
   // ─── ABLY ──────────────────────────────────────────────────────────────────
@@ -695,6 +821,7 @@ const RoomTable = forwardRef<
   useImperativeHandle(ref, () => ({
     startDealAnimationFromOffset,
     animateCardPlay,
+    animateSkippedCardReturn,
   }));
 
   // ─── TRIGGER ───────────────────────────────────────────────────────────────
@@ -710,7 +837,7 @@ const RoomTable = forwardRef<
       const res = await fetch(`/api/room/${roomId}/deal-cards`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roomId, room }),
+        body: JSON.stringify({ roomId, room, userId }),
       });
 
       const json: { data?: { dealStartedAt: number }; error?: string } =
@@ -731,62 +858,357 @@ const RoomTable = forwardRef<
     }
   }
 
+  async function skipTurn() {
+    if (!canSkipTurn || isSkipping) return;
+
+    setIsSkipping(true);
+    setSkipError("");
+
+    try {
+      const response = await fetch(`/api/room/${roomId}/skip-turn`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      const json: {
+        data?: { play: IActiveCardPlay; turnAvailableAt: number };
+        error?: string;
+      } = await response.json();
+
+      if (!response.ok || !json.data) {
+        throw new Error(json.error ?? "Could not skip turn");
+      }
+
+      setNow(explanationEndsAt);
+      await channel.publish("turn-skipped", json.data);
+    } catch (error) {
+      setSkipError(
+        error instanceof Error ? error.message : "Could not skip turn",
+      );
+    } finally {
+      setIsSkipping(false);
+    }
+  }
+
   return (
-    <div className="fixed inset-0 overflow-hidden bg-[#145a32]">
-      <button
-        onClick={deal}
-        className="absolute top-3 left-3 z-[1]"
-      >
-        deal cards
-      </button>
+    <div
+      className={`fixed inset-0 overflow-hidden text-[#f2e8d2] ${
+        ambientGlow
+          ? "bg-[radial-gradient(circle_at_50%_35%,#263b32_0%,#111d19_48%,#070c0a_100%)]"
+          : "bg-[#0c1512]"
+      }`}
+    >
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-4 p-4 sm:p-6">
+        <div className="pointer-events-auto flex items-center gap-3 rounded-lg border border-[#746046]/70 bg-[#101713]/90 px-4 py-3 shadow-[0_12px_32px_rgba(0,0,0,0.45)] backdrop-blur-md">
+          <Shield className="size-5 text-[#e8a52b]" aria-hidden />
+          <div>
+            <p className="text-[10px] font-bold tracking-[0.2em] text-[#998b75] uppercase">
+              Bunker room
+            </p>
+            <p className="font-mono text-sm font-bold tracking-[0.12em] text-[#f2e8d2]">
+              {roomId}
+            </p>
+          </div>
+          <span className="ml-2 flex items-center gap-1.5 border-l border-white/10 pl-3 text-xs text-[#b9ad98]">
+            <Users className="size-3.5" aria-hidden />
+            {Object.keys(room.players).length}
+          </span>
+        </div>
 
-      <Stage width={viewportSize.width} height={viewportSize.height}>
-        <Layer
-          ref={layerRef}
-          x={offset.x}
-          y={offset.y}
-          scaleX={scale}
-          scaleY={scale}
-        >
-          <Ellipse
-            x={layout.center.x}
-            y={layout.center.y}
-            radiusX={layout.radius * 1.6}
-            radiusY={layout.radius * 1.1}
-            fill="#de0efa"
-          />
-
-          {hasCards && room.phase !== "dealing" && (
-            <Text
-              text={statusText}
-              x={layout.center.x - 110}
-              y={layout.center.y - CARD_HEIGHT * 1.8}
-              width={220}
-              align="center"
-              fontSize={16}
-              fontStyle="bold"
-              fill="white"
-            />
+        <div className="pointer-events-auto flex flex-wrap justify-end gap-2">
+          {room.adminId === userId && (
+            <button
+              type="button"
+              onClick={deal}
+              disabled={room.phase === "dealing"}
+              className="inline-flex h-11 items-center gap-2 rounded-md border border-[#806a48] bg-[#1b211c]/95 px-4 text-xs font-black tracking-[0.12em] text-[#eadab9] uppercase shadow-lg transition hover:border-[#d4962c] hover:text-[#ffbd4a] disabled:cursor-wait disabled:opacity-45"
+            >
+              <Play className="size-4 fill-current" aria-hidden />
+              Deal cards
+            </button>
           )}
+          <button
+            type="button"
+            onClick={skipTurn}
+            disabled={!canSkipTurn || isSkipping}
+            title={
+              canSkipTurn
+                ? "Finish your explanation and end the turn"
+                : "Available after you play a card"
+            }
+            className="inline-flex h-11 items-center gap-2 rounded-md border border-[#d08b27] bg-[linear-gradient(180deg,#e8a52b,#a95f16)] px-4 text-xs font-black tracking-[0.12em] text-[#1a1208] uppercase shadow-[0_0_20px_rgba(232,165,43,0.18)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:border-[#4c4941] disabled:bg-[#252823] disabled:text-[#706d64] disabled:shadow-none"
+          >
+            <FastForward className="size-4" aria-hidden />
+            {isSkipping ? "Ending…" : "Skip turn"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsSettingsOpen((open) => !open)}
+            aria-expanded={isSettingsOpen}
+            aria-label="Open table settings"
+            className="grid size-11 place-items-center rounded-md border border-[#665b49] bg-[#161d19]/95 text-[#c9bda8] shadow-lg transition hover:border-[#d4962c] hover:text-[#ffbd4a]"
+          >
+            <Settings className="size-5" aria-hidden />
+          </button>
+        </div>
+      </div>
 
-          {seats.map((p) => (
-            <Group key={p.id} x={p.x} y={p.y}>
-              <Circle radius={32} fill="#222" />
-              <Text
-                text={room.players[p.id]?.nickname ?? p.id}
-                fill="white"
-                x={-70}
-                y={40}
-                width={140}
-                height={18}
-                align="center"
-                wrap="none"
-                ellipsis
-              />
-            </Group>
-          ))}
-        </Layer>
-      </Stage>
+      {skipError && (
+        <p
+          role="alert"
+          className="absolute top-20 right-6 z-30 rounded-md border border-red-500/40 bg-red-950/90 px-4 py-2 text-sm text-red-200 shadow-xl"
+        >
+          {skipError}
+        </p>
+      )}
+
+      {isSettingsOpen && (
+        <aside className="absolute top-20 right-4 z-30 w-[min(22rem,calc(100%-2rem))] overflow-hidden rounded-xl border border-[#6d5b42] bg-[linear-gradient(145deg,rgba(29,35,30,0.98),rgba(10,15,13,0.98))] shadow-[0_24px_70px_rgba(0,0,0,0.65)] backdrop-blur-xl sm:right-6">
+          <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+            <div>
+              <p className="text-[10px] font-bold tracking-[0.2em] text-[#a6977d] uppercase">
+                Gaming zone
+              </p>
+              <h2 className="mt-1 font-black tracking-[0.08em] text-[#f0dfbd] uppercase">
+                Table settings
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsSettingsOpen(false)}
+              aria-label="Close settings"
+              className="grid size-8 place-items-center rounded-md text-[#a99e8c] transition hover:bg-white/5 hover:text-white"
+            >
+              <X className="size-4" aria-hidden />
+            </button>
+          </div>
+
+          <div className="space-y-3 p-5">
+            <button
+              type="button"
+              aria-pressed={ambientGlow}
+              onClick={() => setAmbientGlow((enabled) => !enabled)}
+              className="flex w-full items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-[#a77c39]/60"
+            >
+              <span>
+                <span className="block text-sm font-bold text-[#e5d6ba]">
+                  Ambient table glow
+                </span>
+                <span className="mt-0.5 block text-xs text-[#8f887c]">
+                  Adds depth around the game canvas
+                </span>
+              </span>
+              <span
+                className={`relative h-6 w-11 rounded-full transition ${ambientGlow ? "bg-[#d28d25]" : "bg-[#343832]"}`}
+              >
+                <span
+                  className={`absolute top-1 size-4 rounded-full bg-[#fff3d7] transition-transform ${ambientGlow ? "translate-x-6" : "translate-x-1"}`}
+                />
+              </span>
+            </button>
+
+            <button
+              type="button"
+              aria-pressed={showPlayerStats}
+              onClick={() => setShowPlayerStats((visible) => !visible)}
+              className="flex w-full items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-[#a77c39]/60"
+            >
+              <span>
+                <span className="block text-sm font-bold text-[#e5d6ba]">
+                  Player card counts
+                </span>
+                <span className="mt-0.5 block text-xs text-[#8f887c]">
+                  Show remaining cards under each name
+                </span>
+              </span>
+              <span
+                className={`relative h-6 w-11 rounded-full transition ${showPlayerStats ? "bg-[#d28d25]" : "bg-[#343832]"}`}
+              >
+                <span
+                  className={`absolute top-1 size-4 rounded-full bg-[#fff3d7] transition-transform ${showPlayerStats ? "translate-x-6" : "translate-x-1"}`}
+                />
+              </span>
+            </button>
+
+            <div className="flex items-center justify-between border-t border-white/10 pt-4 text-xs text-[#908778]">
+              <span className="flex items-center gap-2">
+                {room.adminId === userId ? (
+                  <Crown className="size-4 text-[#e8a52b]" aria-hidden />
+                ) : (
+                  <Shield className="size-4" aria-hidden />
+                )}
+                {room.adminId === userId ? "Room host" : "Survivor"}
+              </span>
+              <span>{Object.keys(room.players).length} connected</span>
+            </div>
+          </div>
+        </aside>
+      )}
+
+      {viewportSize.width > 0 && viewportSize.height > 0 && (
+        <Stage width={viewportSize.width} height={viewportSize.height}>
+          <Layer
+          ref={attachLayer}
+            x={offset.x}
+            y={offset.y}
+            scaleX={scale}
+            scaleY={scale}
+          >
+            <Ellipse
+              x={layout.center.x}
+              y={layout.center.y}
+              radiusX={layout.radius * 1.68}
+              radiusY={layout.radius * 1.18}
+              fill="#070b09"
+              shadowColor="#000000"
+              shadowBlur={ambientGlow ? 45 : 18}
+              shadowOpacity={0.85}
+            />
+            <Ellipse
+              x={layout.center.x}
+              y={layout.center.y}
+              radiusX={layout.radius * 1.6}
+              radiusY={layout.radius * 1.1}
+              fillRadialGradientStartPoint={{ x: 0, y: -30 }}
+              fillRadialGradientStartRadius={10}
+              fillRadialGradientEndPoint={{ x: 0, y: 0 }}
+              fillRadialGradientEndRadius={layout.radius * 1.5}
+              fillRadialGradientColorStops={[
+                0,
+                ambientGlow ? "#334b3e" : "#29362f",
+                0.58,
+                "#1b2c25",
+                1,
+                "#0c1713",
+              ]}
+              stroke="#765a36"
+              strokeWidth={9}
+              shadowColor={ambientGlow ? "#c6872d" : "#000000"}
+              shadowBlur={ambientGlow ? 16 : 5}
+              shadowOpacity={0.28}
+            />
+            <Ellipse
+              x={layout.center.x}
+              y={layout.center.y}
+              radiusX={layout.radius * 1.46}
+              radiusY={layout.radius * 0.96}
+              stroke="#9b7748"
+              strokeWidth={1}
+              opacity={0.35}
+            />
+
+            {hasCards && room.phase !== "dealing" && (
+              <Group>
+                <Rect
+                  x={layout.center.x - 145}
+                  y={layout.center.y - CARD_HEIGHT * 1.93}
+                  width={290}
+                  height={36}
+                  cornerRadius={8}
+                  fill="#0a100d"
+                  stroke="#775a35"
+                  strokeWidth={1}
+                  opacity={0.94}
+                />
+                <Text
+                  text={statusText}
+                  x={layout.center.x - 135}
+                  y={layout.center.y - CARD_HEIGHT * 1.84}
+                  width={270}
+                  align="center"
+                  fontFamily="Arial Black"
+                  fontSize={13}
+                  letterSpacing={0.8}
+                  fill="#f2c76e"
+                />
+              </Group>
+            )}
+
+            {seats.map((seat) => {
+              const player = room.players[seat.id];
+              if (!player) return null;
+              const isActive = currentTurn === seat.id;
+              const remainingCards = player.cards.filter(
+                ({ isPlayed }) => !isPlayed,
+              ).length;
+
+              return (
+                <Group
+                  key={seat.id}
+                  x={seat.x}
+                  y={seat.y}
+                  opacity={player.isVotedOut ? 0.35 : 1}
+                >
+                  {isActive && (
+                    <Circle
+                      radius={40}
+                      stroke="#f0a72d"
+                      strokeWidth={2}
+                      shadowColor="#f0a72d"
+                      shadowBlur={18}
+                      shadowOpacity={0.75}
+                    />
+                  )}
+                  <Circle
+                    radius={34}
+                    fill={seat.isLocal ? "#68451e" : "#17221d"}
+                    stroke={isActive ? "#f0b84a" : "#806b4b"}
+                    strokeWidth={3}
+                    shadowColor="#000000"
+                    shadowBlur={10}
+                    shadowOpacity={0.6}
+                  />
+                  <Text
+                    text={(player.nickname || "?").slice(0, 1).toUpperCase()}
+                    fill={seat.isLocal ? "#ffcf72" : "#d9c8a7"}
+                    x={-30}
+                    y={-15}
+                    width={60}
+                    align="center"
+                    fontFamily="Arial Black"
+                    fontSize={27}
+                  />
+                  <Rect
+                    x={-76}
+                    y={42}
+                    width={152}
+                    height={showPlayerStats ? 42 : 28}
+                    cornerRadius={7}
+                    fill="#0b110e"
+                    stroke={isActive ? "#bd8430" : "#534c3e"}
+                    strokeWidth={1}
+                    opacity={0.96}
+                  />
+                  <Text
+                    text={`${player.nickname}${seat.isLocal ? " · YOU" : ""}`}
+                    fill={isActive ? "#ffd27b" : "#eee1c8"}
+                    x={-70}
+                    y={49}
+                    width={140}
+                    height={16}
+                    align="center"
+                    wrap="none"
+                    ellipsis
+                    fontStyle="bold"
+                    fontSize={12}
+                  />
+                  {showPlayerStats && (
+                    <Text
+                      text={`${remainingCards} CARDS LEFT${player.isVotedOut ? " · OUT" : ""}`}
+                      fill="#8f887b"
+                      x={-70}
+                      y={68}
+                      width={140}
+                      align="center"
+                      fontSize={9}
+                    />
+                  )}
+                </Group>
+              );
+            })}
+          </Layer>
+        </Stage>
+      )}
     </div>
   );
 });

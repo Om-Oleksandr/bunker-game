@@ -16,8 +16,22 @@ function drawFromCategory(deck: string[]) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { roomId, room } = body;
-    const { players } = room as IRoom;
+    const roomId = String(body.roomId ?? "");
+    const userId = String(body.userId ?? "");
+    const room = await kv.get<IRoom>(`room:${roomId}`);
+
+    if (!room) {
+      return Response.json({ error: "Room not found" }, { status: 404 });
+    }
+
+    if (!userId || room.adminId !== userId) {
+      return Response.json(
+        { error: "Only the room host can deal cards" },
+        { status: 403 },
+      );
+    }
+
+    const { players } = room;
     const updated = structuredClone(players);
 
     const copiedCards = cloneDeep(player_cards);

@@ -30,7 +30,9 @@ export default function Room({ roomId }: { roomId: string }) {
     return storedUserId;
   });
 
-  const { mutateAsync } = useMutation(joinRoomMutationOptions({}));
+  const { mutateAsync, error: joinError } = useMutation(
+    joinRoomMutationOptions({}),
+  );
   const { data: room, refetch } = useQuery(getRoomQuery({ id: roomId }));
 
   const tableRef = useRef<RoomTableHandle | null>(null);
@@ -54,11 +56,14 @@ export default function Room({ roomId }: { roomId: string }) {
     newRoom.players = { ...room.players, [userId]: player };
 
     await mutateAsync({ userId, nickname, roomId, newRoom });
-    channel?.publish("player-joined", { userId, nickname });
-  }, [channel, mutateAsync, nickname, room, roomId, userId]);
+    await refetch();
+    await channel?.publish("player-joined", { userId, nickname });
+  }, [channel, mutateAsync, nickname, refetch, room, roomId, userId]);
 
   useEffect(() => {
-    mutateStore();
+    void mutateStore().catch((error) => {
+      console.error("Failed to join room", error);
+    });
   }, [mutateStore]);
 
   useEffect(() => {
@@ -94,6 +99,11 @@ export default function Room({ roomId }: { roomId: string }) {
 
     channel.subscribe("card-played", onCardPlayed);
 
+    channel.subscribe("turn-skipped", async (message: InboundMessage) => {
+      await refetch();
+      await tableRef.current?.animateSkippedCardReturn(message.data.play);
+    });
+
     channel.subscribe("round-end", onCardPlayed);
 
     channel.subscribe("vote-start", onCardPlayed);
@@ -118,7 +128,11 @@ export default function Room({ roomId }: { roomId: string }) {
     requestAnimationFrame(() => {
       void tableRef.current
         ?.startDealAnimationFromOffset(startedAt)
-        .then(async () => {
+        .then(async (completed) => {
+          if (!completed) {
+            animatedDealStartedAtRef.current = null;
+            return;
+          }
           if (room.adminId !== userId) return;
 
           await updateRoom(roomId, room, {
@@ -137,6 +151,24 @@ export default function Room({ roomId }: { roomId: string }) {
 
   if (nickname === null) {
     return <NicknamePrompt onSubmit={saveNickname} submitLabel="Continue" />;
+  }
+
+  if (!room.players[userId]) {
+    return (
+      <div className="fixed inset-0 grid place-items-center bg-[radial-gradient(circle_at_center,#263b32,#070c0a)] px-6 text-center text-[#f2e8d2]">
+        <div>
+          <div className="mx-auto mb-5 size-10 animate-spin rounded-full border-2 border-[#665b49] border-t-[#e8a52b]" />
+          <p className="text-xs font-black tracking-[0.18em] text-[#e8a52b] uppercase">
+            {joinError ? "Could not join the room" : "Entering the bunker"}
+          </p>
+          <p className="mt-2 text-sm text-[#9f9584]">
+            {joinError
+              ? "Please refresh the page and try again."
+              : "Preparing your seat…"}
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (
