@@ -11,9 +11,10 @@ import { updateRoom } from "@/app/actions/kv";
 import { nanoid } from "nanoid";
 
 import { useNickname } from "@/hooks/useNickname";
+import NicknamePrompt from "@/app/components/NicknamePrompt";
 
 export default function Room({ roomId }: { roomId: string }) {
-  const { nickname } = useNickname();
+  const { nickname, saveNickname } = useNickname();
   const ably = getAblyClient();
   const channel = ably?.channels.get(`room:${roomId}`);
   const [userId] = useState(() => {
@@ -132,6 +133,10 @@ export default function Room({ roomId }: { roomId: string }) {
 
   if (!room || !channel || !userId) {
     return <>loading</>;
+  }
+
+  if (nickname === null) {
+    return <NicknamePrompt onSubmit={saveNickname} submitLabel="Continue" />;
   }
 
   return (

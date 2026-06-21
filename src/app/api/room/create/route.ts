@@ -11,9 +11,9 @@ export async function POST(req: NextRequest) {
       .trim()
       .slice(0, 24);
 
-    if (!userId || !nickname) {
+    if (!userId) {
       return Response.json(
-        { error: "User ID and nickname are required" },
+        { error: "User ID required" },
         { status: 400 },
       );
     }

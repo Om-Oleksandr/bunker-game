@@ -732,17 +732,10 @@ const RoomTable = forwardRef<
   }
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        overflow: "hidden",
-        background: "#145a32",
-      }}
-    >
+    <div className="fixed inset-0 overflow-hidden bg-[#145a32]">
       <button
         onClick={deal}
-        style={{ position: "absolute", top: 12, left: 12, zIndex: 1 }}
+        className="absolute top-3 left-3 z-[1]"
       >
         deal cards
       </button>
