@@ -19,16 +19,15 @@ export async function POST(req: NextRequest) {
     }
 
     const room = {
-      players: {
+      players: {},
+      spectators: {
         [userId]: {
-          cards: [],
-          playedCards: [],
-          isVotedOut: false,
           id: userId,
           nickname,
         },
       },
-      currentTurn: userId,
+      gameState: "idle",
+      currentTurn: "",
       turnAvailableAt: null,
       activeCardPlay: null,
       roomSettings: {},

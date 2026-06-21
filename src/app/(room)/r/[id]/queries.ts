@@ -1,14 +1,12 @@
 import { GETJoinRoom } from "@/app/api/room/[id]/join/route";
 import { GETRoom } from "@/app/api/room/[id]/route";
 import { MutationConfig, QueryConfig } from "@/types/api";
-import { IRoom } from "@/types/common";
 import { mutationOptions, queryOptions } from "@tanstack/react-query";
 
 type JoinRoomPayload = {
   roomId: string;
   userId: string;
   nickname: string;
-  newRoom: IRoom;
 };
 
 export type RoomData = Awaited<ReturnType<typeof getRoom>>;
@@ -17,7 +15,6 @@ async function joinRoom({
   roomId,
   userId,
   nickname,
-  newRoom,
 }: JoinRoomPayload) {
   const res = await fetch(`/api/room/${roomId}/join`, {
     method: "POST",
@@ -28,7 +25,6 @@ async function joinRoom({
       roomId,
       userId,
       nickname,
-      newRoom,
     }),
   });
   const json: GETJoinRoom = await res.json();

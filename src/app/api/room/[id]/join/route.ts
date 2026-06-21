@@ -14,7 +14,6 @@ export async function POST(
     const body = await req.json();
     const userId = String(body.userId ?? "");
     const nickname = String(body.nickname ?? "").trim().slice(0, 24);
-    const incomingRoom = body.newRoom as IRoom;
 
     if (!userId || !nickname) {
       return NextResponse.json(
@@ -28,23 +27,26 @@ export async function POST(
       return NextResponse.json({ error: "Room not found" }, { status: 404 });
     }
 
-    const incomingPlayer = incomingRoom?.players?.[userId];
-    if (!incomingPlayer) {
-      return NextResponse.json(
-        { error: "Player data is required" },
-        { status: 400 },
-      );
-    }
+    room.spectators ??= {};
+    room.gameState ??= "idle";
 
-    room.players[userId] = {
-      ...incomingPlayer,
-      id: userId,
-      nickname,
-    };
+    if (room.players[userId]) {
+      room.players[userId].nickname = nickname;
+    } else {
+      room.spectators[userId] = { id: userId, nickname };
+    }
 
     await kv.set(`room:${id}`, room);
 
-    return NextResponse.json({ data: { success: true } }, { status: 200 });
+    return NextResponse.json(
+      {
+        data: {
+          success: true,
+          role: room.players[userId] ? "player" : "spectator",
+        },
+      },
+      { status: 200 },
+    );
   } catch (error) {
     console.error("Something wen wrong", error);
     return NextResponse.json({ error: "Couldn't join room" }, { status: 500 });

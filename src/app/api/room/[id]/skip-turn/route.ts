@@ -17,6 +17,11 @@ export async function POST(
       return Response.json({ error: "Room not found" }, { status: 404 });
     }
 
+    room.gameState ??= "idle";
+    if (room.gameState !== "playing") {
+      return Response.json({ error: "The game is not playing" }, { status: 409 });
+    }
+
     const activePlay = room.activeCardPlay;
     const player = room.players[String(userId ?? "")];
     const playedCard = player?.cards.find(

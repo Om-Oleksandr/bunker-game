@@ -3,7 +3,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getRoomQuery, joinRoomMutationOptions } from "../queries";
-import { cloneDeep } from "es-toolkit";
 import { getAblyClient } from "@/lib/ably";
 import RoomTable, { RoomTableHandle } from "./RoomTable";
 import { InboundMessage } from "ably";
@@ -40,22 +39,11 @@ export default function Room({ roomId }: { roomId: string }) {
 
   const mutateStore = useCallback(async () => {
     if (!room || !userId || !nickname) return;
-    const existingPlayer = room.players[userId];
-    if (existingPlayer?.nickname === nickname) return;
+    const existingMember =
+      room.players[userId] ?? room.spectators?.[userId];
+    if (existingMember?.nickname === nickname) return;
 
-    const player = existingPlayer
-      ? { ...existingPlayer, nickname }
-      : {
-          id: userId,
-          nickname,
-          cards: [],
-          playedCards: [],
-          isVotedOut: false,
-        };
-    const newRoom = cloneDeep(room);
-    newRoom.players = { ...room.players, [userId]: player };
-
-    await mutateAsync({ userId, nickname, roomId, newRoom });
+    await mutateAsync({ userId, nickname, roomId });
     await refetch();
     await channel?.publish("player-joined", { userId, nickname });
   }, [channel, mutateAsync, nickname, refetch, room, roomId, userId]);
@@ -79,6 +67,8 @@ export default function Room({ roomId }: { roomId: string }) {
     };
 
     channel.subscribe("player-joined", onPlayerJoined);
+    channel.subscribe("role-changed", onPlayerJoined);
+    channel.subscribe("game-state-changed", onPlayerJoined);
 
     channel.subscribe("deal-start", async () => {
       await refetch();
@@ -153,7 +143,7 @@ export default function Room({ roomId }: { roomId: string }) {
     return <NicknamePrompt onSubmit={saveNickname} submitLabel="Continue" />;
   }
 
-  if (!room.players[userId]) {
+  if (!room.players[userId] && !room.spectators?.[userId]) {
     return (
       <div className="fixed inset-0 grid place-items-center bg-[radial-gradient(circle_at_center,#263b32,#070c0a)] px-6 text-center text-[#f2e8d2]">
         <div>

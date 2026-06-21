@@ -20,6 +20,11 @@ export async function POST(
     if (!room)
       return Response.json({ error: "Room not found" }, { status: 404 });
 
+    room.gameState ??= "idle";
+    if (room.gameState !== "playing") {
+      return Response.json({ error: "The game is not playing" }, { status: 409 });
+    }
+
     room.currentTurn ??= Object.keys(room.players)[0] ?? "";
     room.turnAvailableAt ??= null;
     room.activeCardPlay ??= null;

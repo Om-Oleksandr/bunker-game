@@ -41,8 +41,7 @@ export function getSlotPositions(seat: Seat) {
   const direction = seat.isLocal ? -1 : 1;
   const cardStrideX = CARD_WIDTH + CARD_GAP;
   const cardStrideY = CARD_HEIGHT + CARD_GAP;
-  const bottomRowStartX =
-    seat.x - ((SLOT_COLS_BOTTOM - 1) * cardStrideX) / 2;
+  const bottomRowStartX = seat.x - ((SLOT_COLS_BOTTOM - 1) * cardStrideX) / 2;
   const bottomRowY = seat.y + direction * SLOT_OFFSET_Y;
 
   for (let index = 0; index < SLOT_COLS_BOTTOM; index++) {
@@ -52,8 +51,7 @@ export function getSlotPositions(seat: Seat) {
     });
   }
 
-  const topRowStartX =
-    seat.x - ((SLOT_COLS_TOP - 1) * cardStrideX) / 2;
+  const topRowStartX = seat.x - ((SLOT_COLS_TOP - 1) * cardStrideX) / 2;
   const topRowY = bottomRowY + direction * cardStrideY;
 
   for (let index = 0; index < SLOT_COLS_TOP; index++) {
@@ -88,8 +86,7 @@ export function getTableLayout(width: number, height: number) {
 export function getHandStartX(centerX: number, cardCount: number) {
   if (cardCount === 0) return centerX;
 
-  const totalWidth =
-    cardCount * CARD_WIDTH + (cardCount - 1) * CARD_GAP;
+  const totalWidth = cardCount * CARD_WIDTH + (cardCount - 1) * CARD_GAP;
   return centerX + CARD_WIDTH / 2 - totalWidth / 2;
 }
 
@@ -100,12 +97,30 @@ export function calculateSeats(
   height: number,
 ): Seat[] {
   const list = Object.values(players);
-  const others = list.filter((player) => player.id !== localPlayerId);
+  const localPlayerIndex = list.findIndex(
+    (player) => player.id === localPlayerId,
+  );
+  const others = Array.from(
+    { length: Math.max(list.length - 1, 0) },
+    (_, offset) => list[(localPlayerIndex + offset + 1) % list.length],
+  );
   const centerX = width / 2;
   const centerY = height / 2;
   const radiusX = width * 0.38;
   const radiusY = height * 0.28;
   const arc = Math.PI * 1.1;
+
+  if (!Object.keys(players).includes(localPlayerId)) {
+    return list.map((player, index) => {
+      const angle = -Math.PI / 2 + (index * Math.PI * 2) / list.length;
+      return {
+        id: player.id,
+        x: centerX + Math.cos(angle) * radiusX,
+        y: centerY + Math.sin(angle) * radiusY,
+        isLocal: false,
+      };
+    });
+  }
 
   const seats: Seat[] = [
     {
@@ -122,7 +137,7 @@ export function calculateSeats(
     const angle = Math.PI / 2 + arc / 2 - progress * arc;
 
     seats.push({
-      ...player,
+      id: player.id,
       x: centerX + Math.cos(angle) * radiusX,
       y: centerY - Math.sin(angle) * radiusY + OPPONENT_OFFSET_Y,
       isLocal: false,

@@ -12,7 +12,13 @@ export interface IPlayer {
   isVotedOut: boolean;
 }
 
+export interface ISpectator {
+  id: string;
+  nickname: string;
+}
+
 export type RoomPhase = "idle" | "dealing" | "showdown";
+export type RoomGameState = "idle" | "playing";
 
 export interface IActiveCardPlay {
   seatId: string;
@@ -27,6 +33,8 @@ export interface IActiveCardPlay {
 
 export interface IRoom {
   players: Record<string, IPlayer>;
+  spectators: Record<string, ISpectator>;
+  gameState: RoomGameState;
   roomSettings: Record<string, unknown>;
   bunkerCards: string[];
   catastropheCards: string[];

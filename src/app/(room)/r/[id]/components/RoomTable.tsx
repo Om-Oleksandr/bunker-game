@@ -13,10 +13,13 @@ import { Stage, Layer, Rect, Circle, Text, Group, Ellipse } from "react-konva";
 import Konva from "konva";
 import {
   Crown,
+  Eye,
   FastForward,
   Play,
   Settings,
   Shield,
+  Square,
+  UserPlus,
   Users,
   X,
 } from "lucide-react";
@@ -62,30 +65,6 @@ import {
   type Seat,
 } from "./room-table/tableLayout";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-// ─── Constants (ADD THESE) ────────────────────────────────────────────────────
-
-// Slot grid layout relative to each player's seat position.
-// Bottom row: 4 cards, top row: 3 cards, filling left-to-right bottom-first.
-
-// ─── New helper: compute the 7 slot positions for a given seat ────────────────
-
-/**
- * Returns world positions for all 7 card slots arranged above a seat.
- *
- * Slots are numbered 0–6.
- * Indices 0–3 → bottom row (left to right)
- * Indices 4–6 → top    row (left to right)
- *
- * For the local player (bottom of screen) the grid opens upward.
- * For opponents (top arc) the grid opens downward — negate SLOT_OFFSET_Y.
- */
-/**
- * Returns the next free slot index (0–6) for a seat, or -1 when full.
- * Slots fill left-to-right, bottom row first (indices 0, 1, 2, 3, 4, 5, 6).
- */
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 export interface RoomTableHandle {
   startDealAnimationFromOffset: (startedAt: number) => Promise<boolean>;
   animateSkippedCardReturn: (payload: IActiveCardPlay) => Promise<void>;
@@ -102,16 +81,6 @@ export interface RoomTableHandle {
   }) => Promise<void>;
 }
 
-// ─── Hooks ────────────────────────────────────────────────────────────────────
-
-// ─── Layout ───────────────────────────────────────────────────────────────────
-
-// ─── Animation duration ───────────────────────────────────────────────────────
-
-// ─── Animation helpers ────────────────────────────────────────────────────────
-
-// ─── Component ────────────────────────────────────────────────────────────────
-
 const RoomTable = forwardRef<
   RoomTableHandle,
   {
@@ -127,6 +96,8 @@ const RoomTable = forwardRef<
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSkipping, setIsSkipping] = useState(false);
   const [skipError, setSkipError] = useState("");
+  const [membershipError, setMembershipError] = useState("");
+  const [isChangingMembership, setIsChangingMembership] = useState(false);
   const [ambientGlow, setAmbientGlow] = useState(true);
   const [showPlayerStats, setShowPlayerStats] = useState(true);
   const [isLayerReady, setIsLayerReady] = useState(false);
@@ -168,6 +139,9 @@ const RoomTable = forwardRef<
   const seats = calculateSeats(room.players, userId, width, height);
   const layout = getTableLayout(width, height);
   const currentTurn = room.currentTurn ?? Object.keys(room.players)[0] ?? "";
+  const gameState = room.gameState ?? "idle";
+  const isPlayer = Boolean(room.players[userId]);
+  const isSpectator = !isPlayer && Boolean(room.spectators?.[userId]);
   const explanationEndsAt = room.activeCardPlay?.returnStartedAt ?? 0;
   const activePlayer = room.activeCardPlay
     ? room.players[room.activeCardPlay.seatId]
@@ -182,13 +156,15 @@ const RoomTable = forwardRef<
     activeCardWasPlayed &&
     now < explanationEndsAt;
   const statusText =
-    room.activeCardPlay && now < explanationEndsAt
-      ? `Час: ${Math.ceil((explanationEndsAt - now) / 1000)}s`
-      : room.turnAvailableAt && now < room.turnAvailableAt
-        ? `Наступний хід через ${Math.ceil((room.turnAvailableAt - now) / 1000)}s`
-        : currentTurn === userId
-          ? "Твій хід"
-          : `Чекаємо на ${room.players[room.currentTurn].nickname}`;
+    room.gameState === "idle"
+      ? "Очікуємо початку гри"
+      : room.activeCardPlay && now < explanationEndsAt
+        ? `Час: ${Math.ceil((explanationEndsAt - now) / 1000)}s`
+        : room.turnAvailableAt && now < room.turnAvailableAt
+          ? `Наступний хід через ${Math.ceil((room.turnAvailableAt - now) / 1000)}s`
+          : currentTurn === userId
+            ? "Твій хід"
+            : `Чекаємо на ${room.players[room.currentTurn].nickname}`;
 
   const getSeats = useCallback((): Seat[] => {
     const { width, height } = sceneSizeRef.current;
@@ -825,7 +801,7 @@ const RoomTable = forwardRef<
       const res = await fetch(`/api/room/${roomId}/deal-cards`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roomId, room, userId }),
+        body: JSON.stringify({ roomId, userId }),
       });
 
       const json: { data?: { dealStartedAt: number }; error?: string } =
@@ -843,6 +819,57 @@ const RoomTable = forwardRef<
       isAnimatingRef.current = false;
       renderCardsImmediately();
       console.error("Failed to deal cards:", error);
+    }
+  }
+
+  async function changeMembership() {
+    if (gameState !== "idle" || isChangingMembership) return;
+
+    const role = isSpectator ? "player" : "spectator";
+    setIsChangingMembership(true);
+    setMembershipError("");
+
+    try {
+      const response = await fetch(`/api/room/${roomId}/role`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, role }),
+      });
+      const json: { data?: { role: string }; error?: string } =
+        await response.json();
+      if (!response.ok || !json.data) {
+        throw new Error(json.error ?? "Could not change role");
+      }
+      await channel.publish("role-changed", { userId, role });
+    } catch (error) {
+      setMembershipError(
+        error instanceof Error ? error.message : "Could not change role",
+      );
+    } finally {
+      setIsChangingMembership(false);
+    }
+  }
+
+  async function endGame() {
+    if (room.adminId !== userId || gameState !== "playing") return;
+
+    setMembershipError("");
+    try {
+      const response = await fetch(`/api/room/${roomId}/game-state`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, gameState: "idle" }),
+      });
+      const json: { data?: { gameState: string }; error?: string } =
+        await response.json();
+      if (!response.ok || !json.data) {
+        throw new Error(json.error ?? "Could not end game");
+      }
+      await channel.publish("game-state-changed", { gameState: "idle" });
+    } catch (error) {
+      setMembershipError(
+        error instanceof Error ? error.message : "Could not end game",
+      );
     }
   }
 
@@ -891,7 +918,7 @@ const RoomTable = forwardRef<
           <Shield className="size-5 text-[#e8a52b]" aria-hidden />
           <div>
             <p className="text-[10px] font-bold tracking-[0.2em] text-[#998b75] uppercase">
-              Bunker room
+              Кімната
             </p>
             <p className="font-mono text-sm font-bold tracking-[0.12em] text-[#f2e8d2]">
               {roomId}
@@ -901,34 +928,74 @@ const RoomTable = forwardRef<
             <Users className="size-3.5" aria-hidden />
             {Object.keys(room.players).length}
           </span>
+          <span className="flex items-center gap-1.5 text-xs text-[#8f887c]">
+            <Eye className="size-3.5" aria-hidden />
+            {Object.keys(room.spectators ?? {}).length}
+          </span>
         </div>
 
         <div className="pointer-events-auto flex flex-wrap justify-end gap-2">
-          {room.adminId === userId && (
+          {room.adminId === userId && gameState === "idle" && (
             <button
               type="button"
               onClick={deal}
-              disabled={room.phase === "dealing"}
+              disabled={room.gameState === "playing"}
               className="inline-flex h-11 items-center gap-2 rounded-md border border-[#806a48] bg-[#1b211c]/95 px-4 text-xs font-black tracking-[0.12em] text-[#eadab9] uppercase shadow-lg transition hover:border-[#d4962c] hover:text-[#ffbd4a] disabled:cursor-wait disabled:opacity-45"
             >
               <Play className="size-4 fill-current" aria-hidden />
-              Deal cards
+              Почати гру
+            </button>
+          )}
+          {room.adminId === userId && gameState === "playing" && (
+            <button
+              type="button"
+              onClick={endGame}
+              className="inline-flex h-11 items-center gap-2 rounded-md border border-red-900/70 bg-red-950/80 px-4 text-xs font-black tracking-[0.12em] text-red-200 uppercase transition hover:border-red-600 hover:bg-red-900/80"
+            >
+              <Square className="size-3.5 fill-current" aria-hidden />
+              Закінчити гру
             </button>
           )}
           <button
             type="button"
-            onClick={skipTurn}
-            disabled={!canSkipTurn || isSkipping}
+            onClick={changeMembership}
+            disabled={gameState === "playing" || isChangingMembership}
             title={
-              canSkipTurn
-                ? "Finish your explanation and end the turn"
-                : "Available after you play a card"
+              gameState === "playing"
+                ? "Недоступно під час гри"
+                : isSpectator
+                  ? "Грати"
+                  : "Спостерігати"
             }
-            className="inline-flex h-11 items-center gap-2 rounded-md border border-[#d08b27] bg-[linear-gradient(180deg,#e8a52b,#a95f16)] px-4 text-xs font-black tracking-[0.12em] text-[#1a1208] uppercase shadow-[0_0_20px_rgba(232,165,43,0.18)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:border-[#4c4941] disabled:bg-[#252823] disabled:text-[#706d64] disabled:shadow-none"
+            className="inline-flex h-11 items-center gap-2 rounded-md border border-[#665b49] bg-[#161d19]/95 px-4 text-xs font-black tracking-[0.12em] text-[#d8c9ad] uppercase shadow-lg transition hover:border-[#d4962c] hover:text-[#ffbd4a] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <FastForward className="size-4" aria-hidden />
-            {isSkipping ? "Ending…" : "Skip turn"}
+            {isSpectator ? (
+              <UserPlus className="size-4" aria-hidden />
+            ) : (
+              <Eye className="size-4" aria-hidden />
+            )}
+            {isChangingMembership
+              ? "Оновлення…"
+              : isSpectator
+                ? "Грати"
+                : "Спостерігати"}
           </button>
+          {isPlayer && (
+            <button
+              type="button"
+              onClick={skipTurn}
+              disabled={!canSkipTurn || isSkipping}
+              title={
+                canSkipTurn
+                  ? "Завершити хід та пояснення"
+                  : "Доступно після ходу"
+              }
+              className="inline-flex h-11 items-center gap-2 rounded-md border border-[#d08b27] bg-[linear-gradient(180deg,#e8a52b,#a95f16)] px-4 text-xs font-black tracking-[0.12em] text-[#1a1208] uppercase shadow-[0_0_20px_rgba(232,165,43,0.18)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:border-[#4c4941] disabled:bg-[#252823] disabled:text-[#706d64] disabled:shadow-none"
+            >
+              <FastForward className="size-4" aria-hidden />
+              {isSkipping ? "Пропускаємо…" : "Пропустити"}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setIsSettingsOpen((open) => !open)}
@@ -941,12 +1008,12 @@ const RoomTable = forwardRef<
         </div>
       </div>
 
-      {skipError && (
+      {(skipError || membershipError) && (
         <p
           role="alert"
           className="absolute top-20 right-6 z-30 rounded-md border border-red-500/40 bg-red-950/90 px-4 py-2 text-sm text-red-200 shadow-xl"
         >
-          {skipError}
+          {skipError || membershipError}
         </p>
       )}
 
@@ -955,10 +1022,10 @@ const RoomTable = forwardRef<
           <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
             <div>
               <p className="text-[10px] font-bold tracking-[0.2em] text-[#a6977d] uppercase">
-                Gaming zone
+                Ігрова зона
               </p>
               <h2 className="mt-1 font-black tracking-[0.08em] text-[#f0dfbd] uppercase">
-                Table settings
+                Налаштування столу
               </h2>
             </div>
             <button
@@ -980,10 +1047,10 @@ const RoomTable = forwardRef<
             >
               <span>
                 <span className="block text-sm font-bold text-[#e5d6ba]">
-                  Ambient table glow
+                  Навколишнє світіння столу
                 </span>
                 <span className="mt-0.5 block text-xs text-[#8f887c]">
-                  Adds depth around the game canvas
+                  Додає глибини навколо ігрового полотна
                 </span>
               </span>
               <span
@@ -995,29 +1062,6 @@ const RoomTable = forwardRef<
               </span>
             </button>
 
-            <button
-              type="button"
-              aria-pressed={showPlayerStats}
-              onClick={() => setShowPlayerStats((visible) => !visible)}
-              className="flex w-full items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-[#a77c39]/60"
-            >
-              <span>
-                <span className="block text-sm font-bold text-[#e5d6ba]">
-                  Player card counts
-                </span>
-                <span className="mt-0.5 block text-xs text-[#8f887c]">
-                  Show remaining cards under each name
-                </span>
-              </span>
-              <span
-                className={`relative h-6 w-11 rounded-full transition ${showPlayerStats ? "bg-[#d28d25]" : "bg-[#343832]"}`}
-              >
-                <span
-                  className={`absolute top-1 size-4 rounded-full bg-[#fff3d7] transition-transform ${showPlayerStats ? "translate-x-6" : "translate-x-1"}`}
-                />
-              </span>
-            </button>
-
             <div className="flex items-center justify-between border-t border-white/10 pt-4 text-xs text-[#908778]">
               <span className="flex items-center gap-2">
                 {room.adminId === userId ? (
@@ -1025,9 +1069,13 @@ const RoomTable = forwardRef<
                 ) : (
                   <Shield className="size-4" aria-hidden />
                 )}
-                {room.adminId === userId ? "Room host" : "Survivor"}
+                {room.adminId === userId
+                  ? `Адмін · ${isSpectator ? "Спостерігач" : "Гравець"}`
+                  : isSpectator
+                    ? "Спостерігач"
+                    : "Гравець"}
               </span>
-              <span>{Object.keys(room.players).length} connected</span>
+              <span className="uppercase">{gameState}</span>
             </div>
           </div>
         </aside>
@@ -1036,7 +1084,7 @@ const RoomTable = forwardRef<
       {viewportSize.width > 0 && viewportSize.height > 0 && (
         <Stage width={viewportSize.width} height={viewportSize.height}>
           <Layer
-          ref={attachLayer}
+            ref={attachLayer}
             x={offset.x}
             y={offset.y}
             scaleX={scale}
@@ -1157,10 +1205,10 @@ const RoomTable = forwardRef<
                     fontSize={27}
                   />
                   <Rect
-                    x={-76}
+                    x={-66}
                     y={42}
-                    width={152}
-                    height={showPlayerStats ? 42 : 28}
+                    width={130}
+                    height={28}
                     cornerRadius={7}
                     fill="#0b110e"
                     stroke={isActive ? "#bd8430" : "#534c3e"}
@@ -1180,17 +1228,6 @@ const RoomTable = forwardRef<
                     fontStyle="bold"
                     fontSize={12}
                   />
-                  {showPlayerStats && (
-                    <Text
-                      text={`${remainingCards} CARDS LEFT${player.isVotedOut ? " · OUT" : ""}`}
-                      fill="#8f887b"
-                      x={-70}
-                      y={68}
-                      width={140}
-                      align="center"
-                      fontSize={9}
-                    />
-                  )}
                 </Group>
               );
             })}

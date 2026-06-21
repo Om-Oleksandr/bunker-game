@@ -31,6 +31,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    room.spectators ??= {};
+    room.gameState ??= "idle";
+    if (room.gameState !== "idle") {
+      return Response.json(
+        { error: "The game is already playing" },
+        { status: 409 },
+      );
+    }
+    if (Object.keys(room.players).length === 0) {
+      return Response.json(
+        { error: "At least one player must join the table" },
+        { status: 409 },
+      );
+    }
+
     const { players } = room;
     const updated = structuredClone(players);
 
@@ -58,6 +73,10 @@ export async function POST(req: NextRequest) {
 
     const newRoom = structuredClone(room);
     newRoom.players = updated;
+    newRoom.gameState = "playing";
+    if (!newRoom.players[newRoom.currentTurn]) {
+      newRoom.currentTurn = Object.keys(newRoom.players)[0] ?? "";
+    }
     newRoom.phase = "dealing";
     newRoom.dealStartedAt = Date.now() + DEAL_START_BUFFER;
     newRoom.activeCardPlay = null;
