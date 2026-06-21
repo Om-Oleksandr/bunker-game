@@ -111,12 +111,15 @@ export function calculateSeats(
   const arc = Math.PI * 1.1;
 
   if (!Object.keys(players).includes(localPlayerId)) {
+    const spectatorRadiusX = width * 0.44;
+    const spectatorRadiusY = height * 0.435;
+
     return list.map((player, index) => {
       const angle = -Math.PI / 2 + (index * Math.PI * 2) / list.length;
       return {
         id: player.id,
-        x: centerX + Math.cos(angle) * radiusX,
-        y: centerY + Math.sin(angle) * radiusY,
+        x: centerX + Math.cos(angle) * spectatorRadiusX,
+        y: centerY + Math.sin(angle) * spectatorRadiusY,
         isLocal: false,
       };
     });

@@ -11,6 +11,7 @@ import {
 } from "react";
 import { Stage, Layer, Rect, Circle, Text, Group, Ellipse } from "react-konva";
 import Konva from "konva";
+import { TOTAL_ROUNDS } from "@/common/rounds";
 import {
   Crown,
   Eye,
@@ -21,6 +22,7 @@ import {
   Square,
   UserPlus,
   Users,
+  Vote,
   X,
 } from "lucide-react";
 import {
@@ -79,6 +81,7 @@ export interface RoomTableHandle {
     startedAt: number;
     returnStartedAt: number;
     returnedAt: number;
+    endsRound: boolean;
   }) => Promise<void>;
 }
 
@@ -99,6 +102,7 @@ const RoomTable = forwardRef<
   const [skipError, setSkipError] = useState("");
   const [membershipError, setMembershipError] = useState("");
   const [isChangingMembership, setIsChangingMembership] = useState(false);
+  const [isSubmittingVote, setIsSubmittingVote] = useState(false);
   const [ambientGlow, setAmbientGlow] = useState(true);
   const [isLayerReady, setIsLayerReady] = useState(false);
 
@@ -139,8 +143,14 @@ const RoomTable = forwardRef<
   const seats = calculateSeats(room.players, userId, width, height);
   const layout = getTableLayout(width, height);
   const currentTurn = room.currentTurn ?? Object.keys(room.players)[0] ?? "";
+  const currentRound = room.currentRound ?? 1;
+  const activePlayers = Object.values(room.players).filter(
+    ({ isVotedOut }) => !isVotedOut,
+  );
+  const hasVoted = Boolean(room.voting?.ballots[userId]);
   const gameState = room.gameState ?? "idle";
   const isPlayer = Boolean(room.players[userId]);
+  const canVote = isPlayer && !room.players[userId]?.isVotedOut;
   const isSpectator = !isPlayer && Boolean(room.spectators?.[userId]);
   const explanationEndsAt = room.activeCardPlay?.returnStartedAt ?? 0;
   const activePlayer = room.activeCardPlay
@@ -165,6 +175,10 @@ const RoomTable = forwardRef<
           : currentTurn === userId
             ? "Твій хід"
             : `Чекаємо на ${room.players[room.currentTurn].nickname}`;
+
+  const displayStatusText = room.voting
+    ? `VOTING ${room.voting.eliminationsCompleted + 1}/${room.voting.eliminationsRequired}`
+    : statusText;
 
   const getSeats = useCallback((): Seat[] => {
     const { width, height } = sceneSizeRef.current;
@@ -414,6 +428,7 @@ const RoomTable = forwardRef<
 
       node.off("click tap mouseenter mouseleave");
       const canPlay =
+        !room.voting &&
         currentTurn === userId &&
         (!room.turnAvailableAt || now >= room.turnAvailableAt);
 
@@ -421,7 +436,7 @@ const RoomTable = forwardRef<
         enableCardClick(node, cardId);
       }
     });
-  }, [currentTurn, enableCardClick, now, room.turnAvailableAt, userId]);
+  }, [currentTurn, enableCardClick, now, room.turnAvailableAt, room.voting, userId]);
 
   // ─── RENDER IMMEDIATELY (on reload after animation done) ──────────────────
 
@@ -884,6 +899,31 @@ const RoomTable = forwardRef<
     }
   }
 
+  async function castVote(targetId: string) {
+    if (!room.voting || hasVoted || isSubmittingVote) return;
+
+    setIsSubmittingVote(true);
+    setMembershipError("");
+    try {
+      const response = await fetch(`/api/room/${roomId}/vote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, targetId }),
+      });
+      const json: { data?: unknown; error?: string } = await response.json();
+      if (!response.ok || !json.data) {
+        throw new Error(json.error ?? "Could not submit vote");
+      }
+      await channel.publish("vote-updated", { userId, targetId });
+    } catch (error) {
+      setMembershipError(
+        error instanceof Error ? error.message : "Could not submit vote",
+      );
+    } finally {
+      setIsSubmittingVote(false);
+    }
+  }
+
   async function skipTurn() {
     if (!canSkipTurn || isSkipping) return;
 
@@ -944,6 +984,24 @@ const RoomTable = forwardRef<
             {Object.keys(room.spectators ?? {}).length}
           </span>
         </div>
+
+        {gameState === "playing" && (
+          <div className="pointer-events-auto absolute left-1/2 top-4 -translate-x-1/2 rounded-lg border border-[#7a6039] bg-[#111814]/95 px-5 py-2.5 text-center shadow-[0_10px_30px_rgba(0,0,0,0.45)] backdrop-blur-md sm:top-6">
+            <p className="text-[9px] font-bold tracking-[0.24em] text-[#948875] uppercase">
+              Round
+            </p>
+            <p className="text-lg font-black leading-none text-[#f2c76e]">
+              {currentRound}
+              <span className="text-xs text-[#817765]">/{TOTAL_ROUNDS}</span>
+            </p>
+            {room.voting && (
+              <p className="mt-1 text-[9px] font-bold tracking-[0.12em] text-red-300 uppercase">
+                Voting {room.voting.eliminationsCompleted + 1}/
+                {room.voting.eliminationsRequired}
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="pointer-events-auto flex flex-wrap justify-end gap-2">
           {room.adminId === userId && gameState === "idle" && (
@@ -1026,6 +1084,55 @@ const RoomTable = forwardRef<
         >
           {skipError || membershipError}
         </p>
+      )}
+
+      {room.voting && (
+        <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center p-4 pt-24">
+          <section className="pointer-events-auto w-full max-w-md rounded-xl border border-[#74583a] bg-[linear-gradient(145deg,rgba(28,34,29,0.98),rgba(9,13,11,0.98))] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.7)] backdrop-blur-xl">
+            <div className="flex items-center gap-3 border-b border-white/10 pb-4">
+              <div className="grid size-10 place-items-center rounded-full bg-red-950/70 text-red-300">
+                <Vote className="size-5" aria-hidden />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold tracking-[0.2em] text-[#978a74] uppercase">
+                  End of round {room.voting.round}
+                </p>
+                <h2 className="font-black tracking-[0.08em] text-[#f0dfbd] uppercase">
+                  Choose a player to exile
+                </h2>
+              </div>
+            </div>
+
+            {canVote && !hasVoted ? (
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {activePlayers
+                  .filter(({ id }) => id !== userId)
+                  .map((player) => (
+                    <button
+                      key={player.id}
+                      type="button"
+                      disabled={isSubmittingVote}
+                      onClick={() => castVote(player.id)}
+                      className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-3 text-left text-sm font-bold text-[#e8dcc4] transition hover:border-red-500/60 hover:bg-red-950/30 disabled:opacity-40"
+                    >
+                      {player.nickname}
+                    </button>
+                  ))}
+              </div>
+            ) : (
+              <p className="mt-5 text-center text-sm text-[#a49a89]">
+                {hasVoted
+                  ? "Vote submitted. Waiting for the others…"
+                  : "You are observing this vote."}
+              </p>
+            )}
+
+            <p className="mt-4 text-center text-[10px] tracking-[0.14em] text-[#756e62] uppercase">
+              Exile {room.voting.eliminationsCompleted + 1} of {" "}
+              {room.voting.eliminationsRequired}
+            </p>
+          </section>
+        </div>
       )}
 
       {isSettingsOpen && (
@@ -1158,7 +1265,7 @@ const RoomTable = forwardRef<
                   opacity={0.94}
                 />
                 <Text
-                  text={statusText}
+                  text={displayStatusText}
                   x={layout.center.x - 135}
                   y={layout.center.y - CARD_HEIGHT * 1.84}
                   width={270}

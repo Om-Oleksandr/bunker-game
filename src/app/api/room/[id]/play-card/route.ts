@@ -22,17 +22,30 @@ export async function POST(
 
     room.gameState ??= "idle";
     if (room.gameState !== "playing") {
-      return Response.json({ error: "The game is not playing" }, { status: 409 });
+      return Response.json(
+        { error: "The game is not playing" },
+        { status: 409 },
+      );
     }
 
     room.currentTurn ??= Object.keys(room.players)[0] ?? "";
     room.turnAvailableAt ??= null;
     room.activeCardPlay ??= null;
+    room.currentRound ??= 1;
+    room.startingPlayerCount ??= Object.keys(room.players).length;
+    room.roundEndsAt ??= null;
+    room.voting ??= null;
+
+    if (room.phase === "voting" || room.voting) {
+      return Response.json(
+        { error: "Voting must finish before the next round" },
+        { status: 409 },
+      );
+    }
 
     const player = room.players[seatId];
     if (!player)
       return Response.json({ error: "Player not found" }, { status: 404 });
-
     const card = player.cards.find(({ id }) => id === cardId);
 
     if (!card)
@@ -58,6 +71,7 @@ export async function POST(
       .map(({ id }) => id);
     const playerIndex = playerIds.indexOf(seatId);
     const nextPlayerId = playerIds[(playerIndex + 1) % playerIds.length];
+    const endsRound = playerIndex === playerIds.length - 1;
     const startedAt = Date.now();
     const returnStartedAt =
       startedAt +
@@ -78,6 +92,7 @@ export async function POST(
     room.phase = "showdown";
     room.currentTurn = nextPlayerId;
     room.turnAvailableAt = returnedAt + TURN_PAUSE_DURATION;
+    room.roundEndsAt = endsRound ? room.turnAvailableAt : null;
     room.activeCardPlay = {
       seatId,
       cardId,
@@ -87,6 +102,7 @@ export async function POST(
       startedAt,
       returnStartedAt,
       returnedAt,
+      endsRound,
     };
 
     await kv.set(`room:${id}`, room);

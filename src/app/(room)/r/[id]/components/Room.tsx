@@ -36,6 +36,7 @@ export default function Room({ roomId }: { roomId: string }) {
 
   const tableRef = useRef<RoomTableHandle | null>(null);
   const animatedDealStartedAtRef = useRef<number | null>(null);
+  const advancingRoundEndsAtRef = useRef<number | null>(null);
 
   const mutateStore = useCallback(async () => {
     if (!room || !userId || !nickname) return;
@@ -94,11 +95,8 @@ export default function Room({ roomId }: { roomId: string }) {
       await tableRef.current?.animateSkippedCardReturn(message.data.play);
     });
 
-    channel.subscribe("round-end", onCardPlayed);
-
-    channel.subscribe("vote-start", onCardPlayed);
-    channel.subscribe("player-vote", onCardPlayed);
-    channel.subscribe("vote-end", onCardPlayed);
+    channel.subscribe("round-advanced", onPlayerJoined);
+    channel.subscribe("vote-updated", onPlayerJoined);
 
     channel.subscribe("cards-dealed", () => console.log("cards dealt"));
 
@@ -106,6 +104,36 @@ export default function Room({ roomId }: { roomId: string }) {
       channel.unsubscribe();
     };
   }, [roomId, room, channel, refetch]);
+
+  useEffect(() => {
+    const roundEndsAt = room?.roundEndsAt;
+    if (!roundEndsAt || !channel) return;
+    if (advancingRoundEndsAtRef.current === roundEndsAt) return;
+
+    advancingRoundEndsAtRef.current = roundEndsAt;
+    const timeout = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/room/${roomId}/advance-round`, {
+          method: "POST",
+        });
+        const json: { data?: { changed: boolean }; error?: string } =
+          await response.json();
+        if (!response.ok || !json.data) {
+          throw new Error(json.error ?? "Could not advance round");
+        }
+        await channel.publish("round-advanced", {
+          roundEndsAt,
+          changed: json.data.changed,
+        });
+        await refetch();
+      } catch (error) {
+        advancingRoundEndsAtRef.current = null;
+        console.error("Failed to advance round", error);
+      }
+    }, Math.max(roundEndsAt - Date.now(), 0) + 75);
+
+    return () => window.clearTimeout(timeout);
+  }, [channel, refetch, room?.roundEndsAt, roomId]);
 
   useEffect(() => {
     if (!room || !userId) return;

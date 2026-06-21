@@ -1,7 +1,7 @@
 import { IRoom } from "@/types/common";
 import { cloneDeep } from "es-toolkit";
 import { NextRequest } from "next/server";
-import player_cards from "@/cards/bunker_data.json";
+import player_cards from "@/cards/bunker_data_no_special.json";
 import { kv } from "@vercel/kv";
 import { nanoid } from "nanoid";
 
@@ -53,6 +53,7 @@ export async function POST(req: NextRequest) {
     for (const player of Object.values(updated)) {
       player.cards = [];
       player.playedCards = [];
+      player.isVotedOut = false;
 
       for (const category of Object.keys(copiedCards)) {
         const deck = copiedCards[category as keyof typeof copiedCards];
@@ -74,9 +75,11 @@ export async function POST(req: NextRequest) {
     const newRoom = structuredClone(room);
     newRoom.players = updated;
     newRoom.gameState = "playing";
-    if (!newRoom.players[newRoom.currentTurn]) {
-      newRoom.currentTurn = Object.keys(newRoom.players)[0] ?? "";
-    }
+    newRoom.currentRound = 1;
+    newRoom.startingPlayerCount = Object.keys(updated).length;
+    newRoom.roundEndsAt = null;
+    newRoom.voting = null;
+    newRoom.currentTurn = Object.keys(newRoom.players)[0] ?? "";
     newRoom.phase = "dealing";
     newRoom.dealStartedAt = Date.now() + DEAL_START_BUFFER;
     newRoom.activeCardPlay = null;

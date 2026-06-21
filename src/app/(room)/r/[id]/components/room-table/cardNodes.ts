@@ -73,7 +73,16 @@ export function createCardTextNodes(
   return { categoryText, nameText };
 }
 
+export function cacheCardNode(node: Konva.Group) {
+  const nameText = node.findOne(".cardNameText") as Konva.Text | undefined;
+  node.setAttr("isFaceRevealed", Boolean(nameText?.text()));
+  node.clearCache();
+  node.cache({ pixelRatio: Math.max(Konva.pixelRatio, 2) });
+}
+
 export function revealCardText(node: Konva.Group) {
+  if (node.getAttr("isFaceRevealed")) return;
+
   const cardName = node.getAttr("cardName") as string;
   const cardCategory = node.getAttr("cardCategory") as string;
   const nameText = node.findOne(".cardNameText") as Konva.Text | undefined;
@@ -84,6 +93,9 @@ export function revealCardText(node: Konva.Group) {
   nameText?.text(cardName);
   nameText?.fontSize(getCardNameFontSize(cardName));
   categoryText?.text(cardCategory);
+  node.setAttr("isFaceRevealed", true);
+  node.clearCache();
+  node.cache({ pixelRatio: Math.max(Konva.pixelRatio, 2) });
 }
 
 export function getCardPayload(node: Konva.Group) {

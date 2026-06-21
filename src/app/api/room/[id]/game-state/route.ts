@@ -30,6 +30,8 @@ export async function POST(
       room.dealStartedAt = null;
       room.activeCardPlay = null;
       room.turnAvailableAt = null;
+      room.roundEndsAt = null;
+      room.voting = null;
     }
 
     await kv.set(`room:${id}`, room);

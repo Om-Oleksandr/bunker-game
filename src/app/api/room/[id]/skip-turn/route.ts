@@ -3,6 +3,7 @@ import { kv } from "@vercel/kv";
 import { NextRequest } from "next/server";
 
 const SKIPPED_RETURN_DURATION = 500;
+const TURN_PAUSE_DURATION = 5_000;
 
 export async function POST(
   req: NextRequest,
@@ -46,7 +47,8 @@ export async function POST(
 
     activePlay.returnStartedAt = now;
     activePlay.returnedAt = now + SKIPPED_RETURN_DURATION;
-    room.turnAvailableAt = activePlay.returnedAt;
+    room.turnAvailableAt = activePlay.returnedAt + TURN_PAUSE_DURATION;
+    if (activePlay.endsRound) room.roundEndsAt = room.turnAvailableAt;
 
     await kv.set(`room:${id}`, room);
 

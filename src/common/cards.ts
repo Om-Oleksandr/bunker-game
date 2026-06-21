@@ -1,9 +1,11 @@
+import player_cards from "@/cards/bunker_data_no_special.json";
+
 export const CARD_WIDTH = 90;
 export const CARD_HEIGHT = 120;
 
 export const CARD_GAP = 6;
 
-export const CARDS_PER_PLAYER = 7;
+export const CARDS_PER_PLAYER = Object.keys(player_cards).length;
 
 export const DEAL_DURATION = 800;
 export const DEAL_STAGGER = 300;
