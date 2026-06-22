@@ -24,6 +24,7 @@ export const OPPONENT_CARD_SCALE = 0.50;
 export const SLOT_COLS_BOTTOM = 4;
 export const SLOT_COLS_TOP = 3;
 export const SLOT_OFFSET_Y = 105;
+export const SLOT_CARD_SCALE = 0.75;
 
 export const PLAY_TRAVEL_DURATION = 450;
 export const PLAY_FLIP_DURATION = 300;

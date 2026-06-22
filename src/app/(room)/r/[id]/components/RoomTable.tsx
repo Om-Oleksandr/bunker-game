@@ -36,6 +36,7 @@ import {
   PLAY_FLIP_DURATION,
   PLAY_TRAVEL_DURATION,
   SPREAD_DURATION,
+  SLOT_CARD_SCALE,
   getDealPhaseDuration,
   getTotalAnimationDuration,
 } from "@/common/cards";
@@ -237,7 +238,7 @@ const RoomTable = forwardRef<
             (card) => !card.isPlayed && card.id !== cardId,
           );
           const remainingStartX = getHandStartX(seat.x, remainingCards.length);
-          const handY = getHandY(seat);
+          const handY = getHandY(seat) + 15;
           const handTransitions = remainingCards.flatMap((card, index) => {
             const cardNode = cardNodesRef.current.get(card.id);
             if (!cardNode) return [];
@@ -261,7 +262,7 @@ const RoomTable = forwardRef<
             const easedTime = easeOutCubic(t);
             node.x(fromX + (targetSlot.x - fromX) * easedTime);
             node.y(fromY + (targetSlot.y - fromY) * easedTime);
-
+            node.scale({ x: SLOT_CARD_SCALE, y: SLOT_CARD_SCALE });
             handTransitions.forEach((transition) => {
               transition.node.x(
                 transition.fromX +
@@ -436,7 +437,14 @@ const RoomTable = forwardRef<
         enableCardClick(node, cardId);
       }
     });
-  }, [currentTurn, enableCardClick, now, room.turnAvailableAt, room.voting, userId]);
+  }, [
+    currentTurn,
+    enableCardClick,
+    now,
+    room.turnAvailableAt,
+    room.voting,
+    userId,
+  ]);
 
   // ─── RENDER IMMEDIATELY (on reload after animation done) ──────────────────
 
@@ -524,6 +532,7 @@ const RoomTable = forwardRef<
 
           const cardId = card.id;
           layerRef.current!.add(group);
+          group.scale({ x: SLOT_CARD_SCALE, y: SLOT_CARD_SCALE });
           cardNodesRef.current.set(cardId, group);
         });
       } else {
@@ -622,7 +631,7 @@ const RoomTable = forwardRef<
       const fromY = node.y();
       const fromScaleX = node.scaleX();
       const fromScaleY = node.scaleY();
-      const targetScale = seat.isLocal ? 1 : OPPONENT_CARD_SCALE;
+      const targetScale = seat.isLocal ? SLOT_CARD_SCALE : OPPONENT_CARD_SCALE;
       const distance = Math.hypot(target.x - fromX, target.y - fromY);
 
       node.off("click tap mouseenter mouseleave");
@@ -1128,7 +1137,7 @@ const RoomTable = forwardRef<
             )}
 
             <p className="mt-4 text-center text-[10px] tracking-[0.14em] text-[#756e62] uppercase">
-              Exile {room.voting.eliminationsCompleted + 1} of {" "}
+              Exile {room.voting.eliminationsCompleted + 1} of{" "}
               {room.voting.eliminationsRequired}
             </p>
           </section>

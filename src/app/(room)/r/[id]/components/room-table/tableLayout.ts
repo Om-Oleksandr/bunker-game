@@ -12,6 +12,7 @@ import {
   OPPONENT_OFFSET_Y,
   SLOT_COLS_BOTTOM,
   SLOT_COLS_TOP,
+  SLOT_CARD_SCALE,
   SLOT_OFFSET_Y,
 } from "@/common/cards";
 import type { IRoom } from "@/types/common";
@@ -39,8 +40,8 @@ export interface Seat {
 export function getSlotPositions(seat: Seat) {
   const positions: { x: number; y: number }[] = [];
   const direction = seat.isLocal ? -1 : 1;
-  const cardStrideX = CARD_WIDTH + CARD_GAP;
-  const cardStrideY = CARD_HEIGHT + CARD_GAP;
+  const cardStrideX = CARD_WIDTH * SLOT_CARD_SCALE + CARD_GAP;
+  const cardStrideY = CARD_HEIGHT * SLOT_CARD_SCALE + CARD_GAP;
   const bottomRowStartX = seat.x - ((SLOT_COLS_BOTTOM - 1) * cardStrideX) / 2;
   const bottomRowY = seat.y + direction * SLOT_OFFSET_Y;
 
