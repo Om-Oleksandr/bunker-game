@@ -442,10 +442,16 @@ const RoomTable = forwardRef<
       if (node.getAttr("seatId") !== userId) return;
 
       node.off("click tap mouseenter mouseleave");
+      const isAllowedThisRound =
+        room.currentRound !== 1 ||
+        room.players[userId]?.cards[0]?.id === cardId;
       const canPlay =
         !room.voting &&
         currentTurn === userId &&
-        (!room.turnAvailableAt || now >= room.turnAvailableAt);
+        (!room.turnAvailableAt || now >= room.turnAvailableAt) &&
+        isAllowedThisRound;
+
+      node.opacity(isAllowedThisRound ? 1 : 0.6);
 
       if (canPlay) {
         enableCardClick(node, cardId);
@@ -455,6 +461,8 @@ const RoomTable = forwardRef<
     currentTurn,
     enableCardClick,
     now,
+    room.currentRound,
+    room.players,
     room.turnAvailableAt,
     room.voting,
     userId,

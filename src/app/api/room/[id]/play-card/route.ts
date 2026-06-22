@@ -65,6 +65,13 @@ export async function POST(
     if (!card)
       return Response.json({ error: "Card not found" }, { status: 404 });
 
+    if (room.currentRound === 1 && player.cards[0]?.id !== cardId) {
+      return Response.json(
+        { error: "Only the profession card can be played in round one" },
+        { status: 409 },
+      );
+    }
+
     if (room.currentTurn !== seatId) {
       return Response.json({ error: "It is not your turn" }, { status: 409 });
     }
