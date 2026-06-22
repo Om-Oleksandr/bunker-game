@@ -26,10 +26,26 @@ export async function POST(
 
     room.gameState = gameState;
     if (gameState === "idle") {
+      room.players = Object.fromEntries(
+        Object.entries(room.players).map(([playerId, player]) => [
+          playerId,
+          {
+            ...player,
+            cards: [],
+            playedCards: [],
+            isVotedOut: false,
+          },
+        ]),
+      );
+      room.bunkerCards = [];
+      room.catastropheCards = [];
       room.phase = "idle";
       room.dealStartedAt = null;
+      room.currentTurn = "";
       room.activeCardPlay = null;
       room.turnAvailableAt = null;
+      room.currentRound = 1;
+      room.startingPlayerCount = 0;
       room.roundEndsAt = null;
       room.voting = null;
     }

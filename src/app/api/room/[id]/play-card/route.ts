@@ -43,6 +43,20 @@ export async function POST(
       );
     }
 
+    if (
+      !room.bunkerCards?.some(
+        (bunkerCard) =>
+          typeof bunkerCard !== "string" &&
+          bunkerCard.isRevealed &&
+          bunkerCard.revealedRound === room.currentRound,
+      )
+    ) {
+      return Response.json(
+        { error: "The table admin must reveal this round's bunker card" },
+        { status: 409 },
+      );
+    }
+
     const player = room.players[seatId];
     if (!player)
       return Response.json({ error: "Player not found" }, { status: 404 });

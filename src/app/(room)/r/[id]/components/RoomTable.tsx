@@ -14,6 +14,7 @@ import Konva from "konva";
 import { TOTAL_ROUNDS } from "@/common/rounds";
 import {
   Crown,
+  ChevronDown,
   Eye,
   FastForward,
   Play,
@@ -41,6 +42,7 @@ import {
   getTotalAnimationDuration,
 } from "@/common/cards";
 import { RealtimeChannel } from "ably";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   cacheCardNode,
   createCardRect,
@@ -95,6 +97,7 @@ const RoomTable = forwardRef<
     channel: RealtimeChannel;
   }
 >(({ room, userId, roomId, channel }, ref) => {
+  const queryClient = useQueryClient();
   const { viewportSize, sceneSize, sceneSizeRef, scale, offset } =
     useStageSize();
   const [now, setNow] = useState(() => Date.now());
@@ -104,6 +107,11 @@ const RoomTable = forwardRef<
   const [membershipError, setMembershipError] = useState("");
   const [isChangingMembership, setIsChangingMembership] = useState(false);
   const [isSubmittingVote, setIsSubmittingVote] = useState(false);
+  const [isRevealingBunker, setIsRevealingBunker] = useState(false);
+  const [isCatastropheCollapsed, setIsCatastropheCollapsed] = useState(false);
+  const [collapsedBunkerCards, setCollapsedBunkerCards] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [ambientGlow, setAmbientGlow] = useState(true);
   const [isLayerReady, setIsLayerReady] = useState(false);
 
@@ -149,6 +157,12 @@ const RoomTable = forwardRef<
     ({ isVotedOut }) => !isVotedOut,
   );
   const hasVoted = Boolean(room.voting?.ballots[userId]);
+  const bunkerCardOpenedThisRound = room.bunkerCards?.some(
+    (card) =>
+      typeof card !== "string" &&
+      card.isRevealed &&
+      card.revealedRound === currentRound,
+  );
   const gameState = room.gameState ?? "idle";
   const isPlayer = Boolean(room.players[userId]);
   const canVote = isPlayer && !room.players[userId]?.isVotedOut;
@@ -178,7 +192,7 @@ const RoomTable = forwardRef<
             : `Чекаємо на ${room.players[room.currentTurn].nickname}`;
 
   const displayStatusText = room.voting
-    ? `VOTING ${room.voting.eliminationsCompleted + 1}/${room.voting.eliminationsRequired}`
+    ? `ГОЛОСУВАННЯ ${room.voting.eliminationsCompleted + 1}/${room.voting.eliminationsRequired}`
     : statusText;
 
   const getSeats = useCallback((): Seat[] => {
@@ -592,8 +606,14 @@ const RoomTable = forwardRef<
 
   useEffect(() => {
     if (!isLayerReady || !layerRef.current) return;
+    if (!hasCards) {
+      cardNodesRef.current.forEach((node) => node.destroy());
+      cardNodesRef.current.clear();
+      layerRef.current.draw();
+      return;
+    }
     if (isAnimatingRef.current) return;
-    if (hasCards && room.phase !== "dealing") {
+    if (room.phase !== "dealing") {
       renderCardsImmediately();
     }
   }, [
@@ -839,13 +859,16 @@ const RoomTable = forwardRef<
         body: JSON.stringify({ roomId, userId }),
       });
 
-      const json: { data?: { dealStartedAt: number }; error?: string } =
-        await res.json();
+      const json: {
+        data?: { room: IRoom; dealStartedAt: number };
+        error?: string;
+      } = await res.json();
 
       if (!res.ok || !json.data) {
         throw new Error(json.error ?? "Failed to deal cards");
       }
 
+      queryClient.setQueryData(["/api/room", roomId], json.data.room);
       isAnimatingRef.current = false;
       await channel.publish("deal-start", {
         startedAt: json.data.dealStartedAt,
@@ -933,6 +956,38 @@ const RoomTable = forwardRef<
     }
   }
 
+  async function revealBunkerCard() {
+    if (
+      room.adminId !== userId ||
+      bunkerCardOpenedThisRound ||
+      isRevealingBunker
+    )
+      return;
+
+    setIsRevealingBunker(true);
+    setMembershipError("");
+    try {
+      const response = await fetch(`/api/room/${roomId}/reveal-bunker`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      const json: { data?: unknown; error?: string } = await response.json();
+      if (!response.ok || !json.data) {
+        throw new Error(json.error ?? "Could not reveal bunker card");
+      }
+      await channel.publish("bunker-card-revealed", {
+        round: currentRound,
+      });
+    } catch (error) {
+      setMembershipError(
+        error instanceof Error ? error.message : "Could not reveal bunker card",
+      );
+    } finally {
+      setIsRevealingBunker(false);
+    }
+  }
+
   async function skipTurn() {
     if (!canSkipTurn || isSkipping) return;
 
@@ -997,7 +1052,7 @@ const RoomTable = forwardRef<
         {gameState === "playing" && (
           <div className="pointer-events-auto absolute left-1/2 top-4 -translate-x-1/2 rounded-lg border border-[#7a6039] bg-[#111814]/95 px-5 py-2.5 text-center shadow-[0_10px_30px_rgba(0,0,0,0.45)] backdrop-blur-md sm:top-6">
             <p className="text-[9px] font-bold tracking-[0.24em] text-[#948875] uppercase">
-              Round
+              Раунд
             </p>
             <p className="text-lg font-black leading-none text-[#f2c76e]">
               {currentRound}
@@ -1005,7 +1060,7 @@ const RoomTable = forwardRef<
             </p>
             {room.voting && (
               <p className="mt-1 text-[9px] font-bold tracking-[0.12em] text-red-300 uppercase">
-                Voting {room.voting.eliminationsCompleted + 1}/
+                Голосування {room.voting.eliminationsCompleted + 1}/
                 {room.voting.eliminationsRequired}
               </p>
             )}
@@ -1034,6 +1089,21 @@ const RoomTable = forwardRef<
               Закінчити гру
             </button>
           )}
+          {room.adminId === userId &&
+            gameState === "playing" &&
+            room.phase !== "dealing" &&
+            !room.voting &&
+            !bunkerCardOpenedThisRound && (
+              <button
+                type="button"
+                onClick={revealBunkerCard}
+                disabled={isRevealingBunker}
+                className="inline-flex h-11 items-center gap-2 rounded-md border border-emerald-800/80 bg-emerald-950/80 px-4 text-xs font-black tracking-[0.12em] text-emerald-200 uppercase transition hover:border-emerald-500 hover:bg-emerald-900/80 disabled:cursor-wait disabled:opacity-50"
+              >
+                <Eye className="size-4" aria-hidden />
+                {isRevealingBunker ? "Opening…" : "Open bunker card"}
+              </button>
+            )}
           <button
             type="button"
             onClick={changeMembership}
@@ -1086,6 +1156,120 @@ const RoomTable = forwardRef<
         </div>
       </div>
 
+      {gameState === "playing" &&
+        (room.catastropheCards?.length > 0 || room.bunkerCards?.length > 0) && (
+          <aside className="absolute top-24 left-3 z-10 max-h-[calc(100%-7rem)] w-52 space-y-3 overflow-y-auto pr-1 [scrollbar-width:none] sm:left-5 sm:w-64 [&::-webkit-scrollbar]:hidden">
+            {room.catastropheCards?.map((card, index) => {
+              const name = typeof card === "string" ? card : card.name;
+              const id =
+                typeof card === "string" ? `catastrophe-${index}` : card.id;
+              return (
+                <article
+                  key={id}
+                  className="overflow-hidden rounded-lg border border-red-700/70 bg-[linear-gradient(145deg,rgba(69,10,10,0.96),rgba(24,8,8,0.97))] shadow-[0_12px_30px_rgba(0,0,0,0.4)]"
+                >
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setIsCatastropheCollapsed((collapsed) => !collapsed)
+                    }
+                    aria-expanded={!isCatastropheCollapsed}
+                    aria-controls={`catastrophe-content-${id}`}
+                    className="flex w-full items-center justify-between gap-3 p-3 text-left transition hover:bg-red-800/20 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-red-300"
+                  >
+                    <span className="text-[9px] font-black tracking-[0.18em] text-red-300 uppercase">
+                      Катастрофа
+                    </span>
+                    <ChevronDown
+                      className={`size-4 shrink-0 text-red-300 transition-transform duration-200 ${
+                        isCatastropheCollapsed ? "-rotate-90" : "rotate-0"
+                      }`}
+                      aria-hidden
+                    />
+                  </button>
+                  <div
+                    id={`catastrophe-content-${id}`}
+                    className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${
+                      isCatastropheCollapsed
+                        ? "grid-rows-[0fr] opacity-0"
+                        : "grid-rows-[1fr] opacity-100"
+                    }`}
+                  >
+                    <div className="min-h-0 overflow-hidden">
+                      <p className="px-3 pb-3 text-xs leading-4 text-red-50">
+                        {name}
+                      </p>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+
+            <div className="grid grid-cols-1 gap-2">
+              {room.bunkerCards?.map((card, index) => {
+                const isLegacyCard = typeof card === "string";
+                const isRevealed = !isLegacyCard && card.isRevealed;
+                const id = isLegacyCard ? `bunker-${index}` : card.id;
+                const isCollapsed = collapsedBunkerCards.has(id);
+                return (
+                  <article
+                    key={id}
+                    className={`overflow-hidden rounded-lg border shadow-lg ${
+                      isRevealed
+                        ? "border-emerald-700/70 bg-[linear-gradient(145deg,rgba(12,54,38,0.96),rgba(7,24,18,0.97))]"
+                        : "border-[#66563e] bg-[repeating-linear-gradient(135deg,#1d251f_0px,#1d251f_8px,#151b17_8px,#151b17_16px)]"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCollapsedBunkerCards((collapsedCards) => {
+                          const next = new Set(collapsedCards);
+                          if (next.has(id)) next.delete(id);
+                          else next.add(id);
+                          return next;
+                        })
+                      }
+                      aria-expanded={!isCollapsed}
+                      aria-controls={`bunker-content-${id}`}
+                      className="flex w-full items-center justify-between gap-3 p-3 text-left transition hover:bg-emerald-800/20 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-emerald-300"
+                    >
+                      <span className="text-[9px] font-black tracking-[0.16em] text-emerald-300 uppercase">
+                        Бункер {index + 1}
+                      </span>
+                      <ChevronDown
+                        className={`size-4 shrink-0 text-emerald-300 transition-transform duration-200 ${
+                          isCollapsed ? "-rotate-90" : "rotate-0"
+                        }`}
+                        aria-hidden
+                      />
+                    </button>
+                    <div
+                      id={`bunker-content-${id}`}
+                      className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${
+                        isCollapsed
+                          ? "grid-rows-[0fr] opacity-0"
+                          : "grid-rows-[1fr] opacity-100"
+                      }`}
+                    >
+                      <div className="min-h-0 overflow-hidden">
+                        <p className="px-3 pb-3 text-xs leading-4 text-[#e8dfcc]">
+                          {isRevealed ? card.name : "Таємниця"}
+                        </p>
+                        {isRevealed && card.revealedRound && (
+                          <p className="px-3 pb-3 text-[9px] text-emerald-400/70 uppercase">
+                            Відкрито в {card.revealedRound} раунді
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </aside>
+        )}
+
       {(skipError || membershipError) && (
         <p
           role="alert"
@@ -1104,10 +1288,10 @@ const RoomTable = forwardRef<
               </div>
               <div>
                 <p className="text-[10px] font-bold tracking-[0.2em] text-[#978a74] uppercase">
-                  End of round {room.voting.round}
+                  Кінець {room.voting.round} раунду
                 </p>
                 <h2 className="font-black tracking-[0.08em] text-[#f0dfbd] uppercase">
-                  Choose a player to exile
+                  Оберіть гравця, щоб проголосувати
                 </h2>
               </div>
             </div>
@@ -1131,13 +1315,13 @@ const RoomTable = forwardRef<
             ) : (
               <p className="mt-5 text-center text-sm text-[#a49a89]">
                 {hasVoted
-                  ? "Vote submitted. Waiting for the others…"
-                  : "You are observing this vote."}
+                  ? "Проголосовано. Чекаємо інших…"
+                  : "Вас було вигнано, спостерігайте за голосуванням"}
               </p>
             )}
 
             <p className="mt-4 text-center text-[10px] tracking-[0.14em] text-[#756e62] uppercase">
-              Exile {room.voting.eliminationsCompleted + 1} of{" "}
+              Виганяємо {room.voting.eliminationsCompleted + 1} з{" "}
               {room.voting.eliminationsRequired}
             </p>
           </section>
@@ -1202,7 +1386,9 @@ const RoomTable = forwardRef<
                     ? "Спостерігач"
                     : "Гравець"}
               </span>
-              <span className="uppercase">{gameState}</span>
+              <span className="uppercase">
+                {gameState === "playing" ? "Гра" : "Очікування"}
+              </span>
             </div>
           </div>
         </aside>

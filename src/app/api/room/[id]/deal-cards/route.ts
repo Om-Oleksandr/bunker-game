@@ -2,6 +2,8 @@ import { IRoom } from "@/types/common";
 import { cloneDeep } from "es-toolkit";
 import { NextRequest } from "next/server";
 import player_cards from "@/cards/bunker_data_no_special.json";
+import bunker_cards from "@/cards/bunker_cards.json";
+import catastrophe_cards from "@/cards/catastrophe_cards.json";
 import { kv } from "@vercel/kv";
 import { nanoid } from "nanoid";
 
@@ -11,6 +13,13 @@ function drawFromCategory(deck: string[]) {
   const index = Math.floor(Math.random() * deck.length);
   const [card] = deck.splice(index, 1);
   return card;
+}
+
+function drawCards(deck: string[], count: number) {
+  const available = [...deck];
+  return Array.from({ length: Math.min(count, available.length) }, () =>
+    drawFromCategory(available),
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -79,6 +88,20 @@ export async function POST(req: NextRequest) {
     newRoom.startingPlayerCount = Object.keys(updated).length;
     newRoom.roundEndsAt = null;
     newRoom.voting = null;
+    newRoom.catastropheCards = drawCards(catastrophe_cards, 1).map((name) => ({
+      id: nanoid(9),
+      name,
+      isRevealed: true,
+      revealedAt: Date.now(),
+      revealedRound: 1,
+    }));
+    newRoom.bunkerCards = drawCards(bunker_cards, 5).map((name) => ({
+      id: nanoid(9),
+      name,
+      isRevealed: false,
+      revealedAt: null,
+      revealedRound: null,
+    }));
     newRoom.currentTurn = Object.keys(newRoom.players)[0] ?? "";
     newRoom.phase = "dealing";
     newRoom.dealStartedAt = Date.now() + DEAL_START_BUFFER;

@@ -32,6 +32,14 @@ export interface IActiveCardPlay {
   endsRound: boolean;
 }
 
+export interface ITableCard {
+  id: string;
+  name: string;
+  isRevealed: boolean;
+  revealedAt: number | null;
+  revealedRound: number | null;
+}
+
 export interface IVotingState {
   round: number;
   eliminationsRequired: number;
@@ -44,8 +52,8 @@ export interface IRoom {
   spectators: Record<string, ISpectator>;
   gameState: RoomGameState;
   roomSettings: Record<string, unknown>;
-  bunkerCards: string[];
-  catastropheCards: string[];
+  bunkerCards: ITableCard[];
+  catastropheCards: ITableCard[];
   createdAt: number;
   adminId: string;
   phase: RoomPhase;

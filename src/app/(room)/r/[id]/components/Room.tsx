@@ -78,15 +78,7 @@ export default function Room({ roomId }: { roomId: string }) {
       await refetch();
     });
 
-    channel.subscribe("bunker-card-start", () => console.log("cards dealt"));
-    channel.subscribe("catastrophe-card-start", () =>
-      console.log("cards dealt"),
-    );
-
-    channel.subscribe("bunker-card-revealed", () => console.log("cards dealt"));
-    channel.subscribe("catastrophe-card-revealed", () =>
-      console.log("cards dealt"),
-    );
+    channel.subscribe("bunker-card-revealed", onPlayerJoined);
 
     channel.subscribe("card-played", onCardPlayed);
 
@@ -103,7 +95,7 @@ export default function Room({ roomId }: { roomId: string }) {
     return () => {
       channel.unsubscribe();
     };
-  }, [roomId, room, channel, refetch]);
+  }, [channel, refetch]);
 
   useEffect(() => {
     const roundEndsAt = room?.roundEndsAt;
